@@ -1,0 +1,25 @@
+{
+  "name": "operation-broken-beacon",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Operation Broken Beacon - an original retro carrier-aviation combat flight simulator mission built with Three.js.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/three": "^0.169.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}
