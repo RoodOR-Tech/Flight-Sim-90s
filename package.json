@@ -10,9 +10,13 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "assets:inspect": "gltf-transform inspect public/assets/aircraft/sea-viper/sea-viper.glb",
+    "assets:optimize": "node scripts/optimize-assets.mjs",
+    "assets:optimize:dry": "node scripts/optimize-assets.mjs -- --dry"
   },
   "dependencies": {
+    "postprocessing": "^6.39.3",
     "three": "^0.169.0"
   },
   "devDependencies": {

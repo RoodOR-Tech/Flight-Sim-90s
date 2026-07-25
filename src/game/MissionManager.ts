@@ -189,6 +189,16 @@ export class MissionManager {
     }
   }
 
+  /**
+   * Development/testing only: jumps straight to the return-to-carrier stage.
+   * Used by the automated recovery-and-landing verification run so it does not have to win the
+   * dogfight first. Never called from gameplay code, and the caller is DEV-gated.
+   */
+  devJumpToRecovery() {
+    this.setStage('rtb');
+    this.queueMessage('Resolute Control', 'Viper One, return to Resolute for recovery.');
+  }
+
   enterLandingStage() {
     if (this.stage === 'rtb') {
       this.setStage('landing');

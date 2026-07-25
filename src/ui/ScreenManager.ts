@@ -1,25 +1,41 @@
 import { Settings } from '../game/GameState';
 import { Difficulty } from '../game/Constants';
+import { GraphicsQuality } from '../rendering/GraphicsPresets';
 
 export class LoadingScreen {
   el: HTMLElement;
   private bar: HTMLElement;
+  private stageLabel: HTMLElement;
+
   constructor(container: HTMLElement) {
     this.el = document.createElement('div');
     this.el.className = 'screen';
     this.el.innerHTML = `
       <div class="title-block">
         <h1 class="title-main">OPERATION BROKEN BEACON</h1>
-        <div class="title-sub">INITIALIZING FLIGHT SYSTEMS...</div>
+        <div class="title-sub">INITIALIZING FLIGHT SYSTEMS</div>
         <div class="loading-bar-outer"><div class="loading-bar-inner"></div></div>
+        <div class="loading-stage">Starting up</div>
       </div>
     `;
     container.appendChild(this.el);
     this.bar = this.el.querySelector('.loading-bar-inner')!;
+    this.stageLabel = this.el.querySelector('.loading-stage')!;
   }
+
   setProgress(frac: number) {
     this.bar.style.width = `${Math.round(frac * 100)}%`;
   }
+
+  /** Shows which initialization stage is currently running. */
+  setStage(label: string) {
+    this.stageLabel.textContent = label;
+  }
+
+  show() {
+    this.el.classList.remove('hidden');
+  }
+
   hide() {
     this.el.classList.add('hidden');
   }
@@ -106,53 +122,101 @@ export class SettingsPanel {
 
   private render() {
     this.el.innerHTML = `
-      <div class="crt-panel" style="width:420px;">
+      <div class="crt-panel" style="width:470px;">
         <div class="title-block"><h1 class="title-main" style="font-size:1.6rem;">SETTINGS</h1></div>
+
+        <div class="section-title">GRAPHICS</div>
         <div class="settings-grid">
-          <label>Mouse Sensitivity</label>
+          <label for="set-quality">Quality Preset</label>
+          <select id="set-quality">
+            <option value="auto">Automatic</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+          <label for="set-perf">Performance Overlay</label>
+          <input type="checkbox" id="set-perf" ${this.settings.showPerfOverlay ? 'checked' : ''} />
+          <label for="set-fps">Show FPS Counter</label>
+          <input type="checkbox" id="set-fps" ${this.settings.showFps ? 'checked' : ''} />
+        </div>
+        <p class="settings-note">Water reflections and terrain detail apply on the next mission start.</p>
+
+        <div class="section-title">CAMERA</div>
+        <div class="settings-grid">
+          <label for="set-sens">Mouse Sensitivity</label>
           <input type="range" id="set-sens" min="0" max="1" step="0.05" value="${this.settings.mouseSensitivity}" />
-          <label>Difficulty</label>
+          <label for="set-damping">Chase Camera Damping</label>
+          <input type="range" id="set-damping" min="0.4" max="1.8" step="0.1" value="${this.settings.cameraDamping}" />
+          <label for="set-speedfov">Speed-Based FOV</label>
+          <input type="checkbox" id="set-speedfov" ${this.settings.speedFov ? 'checked' : ''} />
+        </div>
+
+        <div class="section-title">ACCESSIBILITY</div>
+        <div class="settings-grid">
+          <label for="set-shake">Reduce Screen Shake</label>
+          <input type="checkbox" id="set-shake" ${this.settings.reducedScreenShake ? 'checked' : ''} />
+          <label for="set-motion">Reduced Motion</label>
+          <input type="checkbox" id="set-motion" ${this.settings.reducedMotion ? 'checked' : ''} />
+          <label for="set-mute">Mute Audio</label>
+          <input type="checkbox" id="set-mute" ${this.settings.muted ? 'checked' : ''} />
+        </div>
+
+        <div class="section-title">DIFFICULTY</div>
+        <div class="settings-grid">
+          <label for="set-diff">Enemy Difficulty</label>
           <select id="set-diff">
             <option value="easy">Easy</option>
             <option value="normal">Normal</option>
             <option value="hard">Hard</option>
           </select>
-          <label>Mute Audio</label>
-          <input type="checkbox" id="set-mute" ${this.settings.muted ? 'checked' : ''} />
-          <label>Reduce Screen Shake</label>
-          <input type="checkbox" id="set-shake" ${this.settings.reducedScreenShake ? 'checked' : ''} />
-          <label>Show FPS Counter</label>
-          <input type="checkbox" id="set-fps" ${this.settings.showFps ? 'checked' : ''} />
         </div>
+
         <div class="actions-row">
           <div></div>
           <button class="hud-button" id="set-close-btn">CLOSE</button>
         </div>
       </div>
     `;
+
     const diffSelect = this.el.querySelector<HTMLSelectElement>('#set-diff')!;
     diffSelect.value = this.settings.difficulty;
     diffSelect.addEventListener('change', () => {
       this.settings.difficulty = diffSelect.value as Difficulty;
       this.onChange(this.settings);
     });
-    this.el.querySelector<HTMLInputElement>('#set-sens')!.addEventListener('input', (e) => {
-      this.settings.mouseSensitivity = parseFloat((e.target as HTMLInputElement).value);
+
+    const qualitySelect = this.el.querySelector<HTMLSelectElement>('#set-quality')!;
+    qualitySelect.value = this.settings.graphicsQuality;
+    qualitySelect.addEventListener('change', () => {
+      this.settings.graphicsQuality = qualitySelect.value as GraphicsQuality;
       this.onChange(this.settings);
     });
-    this.el.querySelector<HTMLInputElement>('#set-mute')!.addEventListener('change', (e) => {
-      this.settings.muted = (e.target as HTMLInputElement).checked;
-      this.onChange(this.settings);
-    });
-    this.el.querySelector<HTMLInputElement>('#set-shake')!.addEventListener('change', (e) => {
-      this.settings.reducedScreenShake = (e.target as HTMLInputElement).checked;
-      this.onChange(this.settings);
-    });
-    this.el.querySelector<HTMLInputElement>('#set-fps')!.addEventListener('change', (e) => {
-      this.settings.showFps = (e.target as HTMLInputElement).checked;
-      this.onChange(this.settings);
-    });
+
+    this.bindRange('#set-sens', (v) => (this.settings.mouseSensitivity = v));
+    this.bindRange('#set-damping', (v) => (this.settings.cameraDamping = v));
+
+    this.bindCheckbox('#set-mute', (v) => (this.settings.muted = v));
+    this.bindCheckbox('#set-shake', (v) => (this.settings.reducedScreenShake = v));
+    this.bindCheckbox('#set-motion', (v) => (this.settings.reducedMotion = v));
+    this.bindCheckbox('#set-fps', (v) => (this.settings.showFps = v));
+    this.bindCheckbox('#set-perf', (v) => (this.settings.showPerfOverlay = v));
+    this.bindCheckbox('#set-speedfov', (v) => (this.settings.speedFov = v));
+
     this.el.querySelector('#set-close-btn')!.addEventListener('click', () => this.onCloseCb?.());
+  }
+
+  private bindRange(selector: string, apply: (value: number) => void) {
+    this.el.querySelector<HTMLInputElement>(selector)!.addEventListener('input', (e) => {
+      apply(parseFloat((e.target as HTMLInputElement).value));
+      this.onChange(this.settings);
+    });
+  }
+
+  private bindCheckbox(selector: string, apply: (value: boolean) => void) {
+    this.el.querySelector<HTMLInputElement>(selector)!.addEventListener('change', (e) => {
+      apply((e.target as HTMLInputElement).checked);
+      this.onChange(this.settings);
+    });
   }
 
   onClose(cb: () => void) {

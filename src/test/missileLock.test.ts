@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { RadarSystem } from '../systems/RadarSystem';
 import { PlayerAircraft } from '../entities/PlayerAircraft';
 import { Targetable } from '../game/Types';
+import { PRESETS } from '../rendering/GraphicsPresets';
 
 class FakeTarget implements Targetable {
   id = 'fake-1';
@@ -52,7 +53,8 @@ describe('RadarSystem missile-lock eligibility', () => {
 
   beforeEach(() => {
     scene = new THREE.Scene();
-    player = new PlayerAircraft(scene);
+    // Low preset keeps the procedural model cheap to build in the test environment.
+    player = new PlayerAircraft(scene, PRESETS.low);
     radar = new RadarSystem();
   });
 

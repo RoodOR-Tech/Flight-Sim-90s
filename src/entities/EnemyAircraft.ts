@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { AircraftController } from '../flight/AircraftController';
 import { FlightModel, DEFAULT_FLIGHT_CONFIG, FlightControls } from '../flight/FlightModel';
-import { AircraftVisual, buildAircraft } from '../game/AssetFactory';
 import { Targetable } from '../game/Types';
 import { DifficultySettings } from '../game/Constants';
+import { AircraftModelResult, buildAircraftModel } from '../rendering/models/AircraftModel';
+import { GraphicsSettings } from '../rendering/GraphicsPresets';
 
 export type EnemyState =
   | 'patrol'
@@ -28,7 +29,9 @@ export class EnemyAircraft implements Targetable {
   label = 'Kestrel-9';
 
   controller: AircraftController;
-  visual: AircraftVisual;
+  /** Entity root driven by the flight model; the detailed visual hangs beneath it. */
+  root = new THREE.Group();
+  model: AircraftModelResult;
   state: EnemyState = 'patrol';
 
   private stateTimer = 0;
@@ -40,20 +43,31 @@ export class EnemyAircraft implements Targetable {
   private missilesLeft = 2;
   private evadeDir = 1;
   private beingTargetedByMissile = false;
+  private smokeTimer = 0;
+  /** Per-aircraft phase offset so the two enemies' flame flicker is not synchronised. */
+  private flickerOffset = Math.random() * Math.PI * 2;
 
   cannonFireRequested = false;
   missileFireRequested = false;
 
-  constructor(scene: THREE.Scene, spawnPos: THREE.Vector3, private difficulty: DifficultySettings) {
+  constructor(
+    scene: THREE.Scene,
+    spawnPos: THREE.Vector3,
+    private difficulty: DifficultySettings,
+    settings: GraphicsSettings,
+  ) {
     enemyCounter += 1;
     this.id = `enemy-${enemyCounter}`;
-    this.visual = buildAircraft(true);
-    scene.add(this.visual.group);
+    this.root.name = this.id;
+    this.model = buildAircraftModel('kestrel-9', settings);
+    this.root.add(this.model.group);
+    scene.add(this.root);
+
     const fm = new FlightModel({ ...DEFAULT_FLIGHT_CONFIG, maxHealth: difficulty.enemyHealth });
     fm.position.copy(spawnPos);
     fm.throttle = 0.55;
     fm.velocity.set(0, 0, -90);
-    this.controller = new AircraftController(this.visual.group, fm);
+    this.controller = new AircraftController(this.root, fm);
     this.patrolCenter = spawnPos.clone();
     this.patrolAngle = Math.random() * Math.PI * 2;
   }
@@ -143,11 +157,46 @@ export class EnemyAircraft implements Targetable {
     const controls = this.computeControls(dt, playerPos, playerAlive, otherEnemyPos, distToPlayer);
     this.controller.step(dt, controls);
 
+    this.updateVisuals(dt);
+  }
+
+  /** Drives exhaust glow, afterburner plume and control-surface deflection from the sim state. */
+  private updateVisuals(dt: number) {
     const fm = this.controller.flightModel;
-    const glowOn = fm.afterburnerActive ? 0.9 : fm.throttle * 0.4;
-    (this.visual.leftEngineGlow.material as THREE.MeshBasicMaterial).opacity = glowOn;
-    (this.visual.rightEngineGlow.material as THREE.MeshBasicMaterial).opacity = glowOn;
-    this.visual.gearGroup.visible = false;
+    const glowOn = fm.afterburnerActive ? 0.92 : fm.throttle * 0.5;
+    for (const glow of this.model.engineGlows) {
+      (glow.material as THREE.MeshBasicMaterial).opacity = glowOn;
+      glow.scale.setScalar(fm.afterburnerActive ? 1.3 : 0.85 + fm.throttle * 0.3);
+    }
+    for (const flame of this.model.afterburnerFlames) {
+      const mat = flame.material as THREE.MeshBasicMaterial;
+      const flicker = 0.8 + Math.sin(performance.now() * 0.045 + this.flickerOffset) * 0.2;
+      mat.opacity = fm.afterburnerActive ? 0.55 * flicker : 0;
+      flame.scale.set(1, 1, fm.afterburnerActive ? flicker : 0.01);
+    }
+
+    const roll = THREE.MathUtils.clamp(fm.lastControls.roll, -1, 1);
+    const pitch = THREE.MathUtils.clamp(fm.lastControls.pitch, -1, 1);
+    this.model.rightAileron.rotation.x = -roll * 0.4 + pitch * 0.12;
+    this.model.leftAileron.rotation.x = roll * 0.4 + pitch * 0.12;
+    for (const rudder of this.model.rudders) {
+      rudder.rotation.y = -THREE.MathUtils.clamp(fm.lastControls.yaw, -1, 1) * 0.3;
+    }
+
+    // Trailing smoke once badly damaged gives the player visual feedback on their hits.
+    this.smokeTimer -= dt;
+  }
+
+  /** True when this aircraft should emit damage smoke this frame (and resets the timer). */
+  consumeSmokeTick(): boolean {
+    if (this.controller.healthFraction() > 0.45 || !this.controller.alive) return false;
+    if (this.smokeTimer > 0) return false;
+    this.smokeTimer = 0.09;
+    return true;
+  }
+
+  getDamageWorldPositions(): THREE.Vector3[] {
+    return this.model.damageEffectPoints.map((p) => p.getWorldPosition(new THREE.Vector3()));
   }
 
   private computeControls(
@@ -260,6 +309,11 @@ export class EnemyAircraft implements Targetable {
   }
 
   dispose(scene: THREE.Scene) {
-    scene.remove(this.visual.group);
+    scene.remove(this.root);
+    this.model.dispose();
+  }
+
+  setVisible(v: boolean) {
+    this.root.visible = v;
   }
 }

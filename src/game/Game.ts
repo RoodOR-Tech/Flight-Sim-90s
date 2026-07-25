@@ -23,8 +23,23 @@ import { LoadingScreen, TitleScreen, PauseMenu, SettingsPanel } from '../ui/Scre
 import { DIFFICULTY_TABLE, FIXED_TIMESTEP, MAX_FRAME_DT, MPS_TO_KNOTS, METERS_TO_FEET } from './Constants';
 import { Targetable } from './Types';
 import { CARRIER_LOCAL } from '../entities/Carrier';
+import {
+  applyRendererQuality,
+  createCamera,
+  createRenderer,
+  createScene,
+} from '../rendering/RendererSetup';
+import { GraphicsSettings, resolvePreset, detectAutoPreset } from '../rendering/GraphicsPresets';
+import { CameraMode, CameraRig, CameraRigInput } from '../rendering/CameraRig';
+import { PerformanceMonitor } from '../rendering/PerformanceMonitor';
+import { AdaptiveQuality } from '../rendering/AdaptiveQuality';
+import { PostProcessing } from '../rendering/PostProcessing';
+import { CockpitView } from '../rendering/CockpitView';
+import { AssetLoader } from '../rendering/AssetLoader';
+import { MODEL_SLOTS, loadOptionalModels } from '../rendering/ModelRegistry';
+import { inspectModel, logModelReport } from '../rendering/ModelDiagnostics';
+import { MAX_PIXEL_RATIO } from '../rendering/RenderConstants';
 
-type CameraMode = 'cockpit' | 'chase' | 'cinematic';
 type LaunchPhase = 'none' | 'onDeck' | 'catapult' | 'airborne';
 
 const CAMERA_MODES: CameraMode[] = ['chase', 'cockpit', 'cinematic'];
@@ -60,8 +75,15 @@ export class Game {
   private subtitleEl: HTMLElement;
   private fpsEl: HTMLElement;
 
+  private graphics: GraphicsSettings;
+  private cameraRig = new CameraRig();
+  private perf: PerformanceMonitor;
+  private adaptive: AdaptiveQuality;
+  private post: PostProcessing | null = null;
+  private cockpit!: CockpitView;
+  private assets: AssetLoader;
+
   private cameraMode: CameraMode = 'chase';
-  private cameraModeChanged = true;
   private lookYawDeg = 0;
   private lookPitchDeg = 0;
   private launchPhase: LaunchPhase = 'none';
@@ -74,21 +96,51 @@ export class Game {
   private fpsTimer = 0;
   private landingResult: 'pending' | 'success' | 'crash' = 'pending';
 
+  // Reused scratch objects — the render loop must not allocate per frame.
+  private tmpShake = new THREE.Vector3();
+  private tmpForward = new THREE.Vector3();
+  private tmpVec = new THREE.Vector3();
+  private rigInput: CameraRigInput;
+
   constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.graphics = resolvePreset('auto');
 
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.5, 8500);
+    this.renderer = createRenderer(canvas, this.graphics);
+    this.scene = createScene();
+    this.camera = createCamera();
+    // The camera is added to the scene so the cockpit (parented to it) is rendered.
+    this.scene.add(this.camera);
 
-    this.world = new WorldBuilder(this.scene);
-    this.effects = new EffectsSystem(this.scene);
+    this.assets = new AssetLoader(this.renderer);
+    this.world = new WorldBuilder(this.scene, this.graphics);
+    this.effects = new EffectsSystem(this.scene, this.graphics);
+    this.cockpit = new CockpitView(this.camera);
+
+    this.adaptive = new AdaptiveQuality(this.renderer.getPixelRatio(), {
+      setPixelRatio: (r) => {
+        this.renderer.setPixelRatio(r);
+        this.post?.setSize(window.innerWidth, window.innerHeight);
+      },
+    });
 
     this.input = new InputManager(canvas);
     this.playerInputAdapter = new PlayerInputAdapter(this.input);
 
+    this.rigInput = {
+      position: new THREE.Vector3(),
+      quaternion: new THREE.Quaternion(),
+      forward: new THREE.Vector3(),
+      speed: 0,
+      afterburner: false,
+      rollDeg: 0,
+      groundHeight: 0,
+      shake: this.tmpShake,
+      lookYawDeg: 0,
+      lookPitchDeg: 0,
+    };
+
     this.hud = new HUD(uiRoot);
+    this.perf = new PerformanceMonitor(uiRoot);
     this.tacticalMap = new TacticalMap(uiRoot);
     this.briefing = new BriefingScreen(uiRoot);
     this.results = new ResultsScreen(uiRoot);
@@ -113,15 +165,96 @@ export class Game {
     uiRoot.appendChild(this.fpsEl);
 
     this.wireScreens();
-    window.addEventListener('resize', () => this.onResize());
+    window.addEventListener('resize', this.onResize);
+    this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost, false);
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.onContextRestored, false);
 
     this.hud.setVisible(false);
-    this.showLoading();
+    this.exposeTestState();
+    void this.initializePostProcessing();
+    void this.showLoading();
   }
 
-  private get worldBuilder(): WorldBuilder {
-    return this.world;
+  /**
+   * Publishes a small read-only snapshot of scene/mission state on `window.__obbTestState`.
+   *
+   * This exists so the browser smoke test can assert that the world really loaded and the aircraft
+   * really flies, rather than only checking that DOM elements exist. It is a getter over live state
+   * with no setters, so it cannot be used to drive the game.
+   */
+  private exposeTestState() {
+    if (import.meta.env.DEV) {
+      // Development-only affordance so an automated run can exercise the recovery and landing
+      // phases without first having to win the dogfight. Stripped from production builds.
+      (window as unknown as Record<string, unknown>).__obbDevSkipToRecovery = () => {
+        for (const enemy of this.enemies) {
+          enemy.applyDamage(9999);
+          enemy.setVisible(false);
+        }
+        this.groundTarget.active = true;
+        this.groundTarget.applyDamage(9999);
+        this.mission.devJumpToRecovery();
+        return this.mission.stage;
+      };
+    }
+
+    (window as unknown as Record<string, unknown>).__obbTestState = () => {
+      const fm = this.player?.controller.flightModel;
+      return {
+        screen: this.state.screen,
+        paused: this.state.paused,
+        missionStage: this.mission.stage,
+        launchPhase: this.launchPhase,
+        cameraMode: this.cameraMode,
+        playerLoaded: Boolean(this.player && this.player.root.parent === this.scene),
+        carrierLoaded: Boolean(this.world?.carrier?.group.parent === this.scene),
+        radarSiteLoaded: Boolean(this.groundTarget && this.groundTarget.root.parent === this.scene),
+        enemyCount: this.enemies.length,
+        enemiesAlive: this.enemies.filter((e) => e.isAlive()).length,
+        altitude: fm ? fm.position.y : 0,
+        speed: fm ? fm.getSpeed() : 0,
+        heading: fm ? fm.getHeadingDegrees() : 0,
+        health: this.player?.controller.health ?? 0,
+        maxHealth: this.player?.controller.maxHealth ?? 0,
+        missiles: this.player?.missileCount ?? 0,
+        cannonAmmo: this.player?.cannonAmmo ?? 0,
+        radarDestroyed: this.groundTarget?.destroyed ?? false,
+        landingResult: this.landingResult,
+        graphicsQuality: this.effectiveGraphicsLabel(),
+        pixelRatio: this.renderer.getPixelRatio(),
+        postProcessing: this.post?.isEnabled() ?? false,
+        // Positions, so an automated regression run can navigate the mission end to end.
+        position: fm ? fm.position.toArray() : [0, 0, 0],
+        pitchDeg: fm ? fm.getPitchDegrees() : 0,
+        rollDeg: fm ? fm.getRollDegrees() : 0,
+        stalling: fm?.stalling ?? false,
+        gearDown: fm?.gearDown ?? false,
+        flapsDown: fm?.flapsDown ?? false,
+        locked: this.player?.locked ?? false,
+        lockProgress: this.player?.lockProgress ?? 0,
+        currentTargetId: this.player?.currentTargetId ?? null,
+        waypoint: this.mission.currentWaypoint()?.toArray() ?? null,
+        carrierPosition: this.world?.carrier?.getPosition().toArray() ?? [0, 0, 0],
+        carrierHeading: this.world?.carrier?.headingDeg ?? 0,
+        radarPosition: this.groundTarget?.getPosition().toArray() ?? [0, 0, 0],
+        enemies: this.enemies.map((e) => ({
+          id: e.id,
+          alive: e.isAlive(),
+          position: e.getPosition().toArray(),
+        })),
+      };
+    };
   }
+
+  private async initializePostProcessing() {
+    if (!this.graphics.postProcessing) {
+      this.post?.dispose();
+      this.post = null;
+      return;
+    }
+    this.post = await PostProcessing.create(this.renderer, this.scene, this.camera, this.graphics);
+  }
+
 
   private wireScreens() {
     this.title.onStart(() => this.goToBriefing());
@@ -135,21 +268,70 @@ export class Game {
     });
   }
 
-  private showLoading() {
+  /**
+   * Reports real initialization stages on the loading screen.
+   *
+   * The world, terrain and carrier are already built by the constructor (they are procedural); this
+   * pass probes for the *optional* external models, which is genuine async work that can fail. The
+   * mission is not offered until it completes, but a missing optional GLB never blocks it.
+   */
+  private async showLoading() {
     this.state.screen = 'loading';
-    let progress = 0;
-    const step = () => {
-      progress += 0.14;
-      this.loading.setProgress(Math.min(1, progress));
-      if (progress >= 1) {
-        this.loading.hide();
-        this.goToTitle();
-      } else {
-        requestAnimationFrame(step);
-      }
-    };
-    requestAnimationFrame(step);
     this.startLoop();
+
+    const totalSteps = 6;
+    let completed = 0;
+    const advance = (label: string) => {
+      completed += 1;
+      this.loading.setStage(label);
+      this.loading.setProgress(completed / totalSteps);
+      // Yield to the browser so the loading bar actually paints between stages.
+      return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    };
+
+    try {
+      await advance('Core systems');
+      await advance('Environment and atmosphere');
+      await advance('Terrain and islands');
+
+      // Probe optional external models. Each resolves to either a GLB or a procedural fallback.
+      this.assets.setTotalSteps(Object.keys(MODEL_SLOTS).length);
+      this.loading.setStage('Checking for optional models');
+      const loaded = await loadOptionalModels(this.assets, this.graphics);
+
+      if (import.meta.env.DEV) {
+        for (const [key, result] of Object.entries(loaded)) {
+          if (!result.usedFallback) {
+            logModelReport(inspectModel(result.object, `${key} (${result.source})`));
+          }
+        }
+        const external = Object.entries(loaded).filter(([, r]) => !r.usedFallback);
+        console.info(
+          external.length === 0
+            ? '[Game] No external models supplied; using procedural geometry for everything (expected).'
+            : `[Game] Using external models for: ${external.map(([k]) => k).join(', ')}`,
+        );
+      }
+      // The probe results are diagnostic only — the live entities are built from the procedural
+      // models so their gameplay attachment points are guaranteed present. See ASSET_GUIDE.md.
+      for (const result of Object.values(loaded)) {
+        result.object.traverse((o) => {
+          if (o instanceof THREE.Mesh) {
+            o.geometry?.dispose();
+          }
+        });
+      }
+
+      await advance('Combat systems');
+      await advance('Audio');
+      await advance('Mission data');
+    } catch (err) {
+      // Initialization must never dead-end on a blank canvas.
+      console.error('[Game] Initialization hit a problem; continuing with fallbacks.', err);
+    }
+
+    this.loading.hide();
+    this.goToTitle();
   }
 
   private goToTitle() {
@@ -179,6 +361,40 @@ export class Game {
   private applySettings(s: typeof this.state.settings) {
     this.audio.setMuted(s.muted);
     this.input.sensitivity = s.mouseSensitivity;
+    this.perf.setVisible(s.showPerfOverlay);
+    this.cameraRig.dampingScale = s.cameraDamping;
+    this.applyGraphicsQuality();
+  }
+
+  /** Re-resolves the graphics preset and pushes it through every subsystem that depends on it. */
+  private applyGraphicsQuality() {
+    const next = resolvePreset(this.state.settings.graphicsQuality);
+    const postProcessingChanged = next.postProcessing !== this.graphics.postProcessing
+      || next.bloom !== this.graphics.bloom
+      || next.antialiasPass !== this.graphics.antialiasPass
+      || next.vignette !== this.graphics.vignette;
+
+    this.graphics = next;
+    applyRendererQuality(this.renderer, next);
+    this.adaptive.setBasePixelRatio(
+      Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO, next.maxPixelRatio),
+    );
+    this.adaptive.reset();
+    this.world.applyQuality(next);
+    this.effects.applyQuality(next);
+
+    if (postProcessingChanged) {
+      this.post?.dispose();
+      this.post = null;
+      void this.initializePostProcessing();
+    }
+    // Note: water reflectivity and terrain mesh density are baked at construction; they take
+    // effect on the next mission start rather than mid-flight, to avoid a visible rebuild hitch.
+  }
+
+  private effectiveGraphicsLabel(): string {
+    const q = this.state.settings.graphicsQuality;
+    return q === 'auto' ? `auto(${detectAutoPreset()})` : q;
   }
 
   // ------------------------------------------------------------------
@@ -194,13 +410,20 @@ export class Game {
     this.setupEntities();
     this.mission.reset();
     this.combat.reset(this.scene);
+    this.effects.reset();
+    this.world.resetForMission();
+    this.cameraRig.reset();
+    this.adaptive.reset();
+    this.lookYawDeg = 0;
+    this.lookPitchDeg = 0;
     this.missionStartElapsed = 0;
     this.landingResult = 'pending';
     this.lastMessageId = -1;
+    this.subtitleEl.style.display = 'none';
 
     if (result.skipLaunch) {
       this.launchPhase = 'airborne';
-      const carrier = this.worldBuilder.carrier;
+      const carrier = this.world.carrier;
       const startPos = carrier.getPosition().clone().add(new THREE.Vector3(400, 420, -600));
       this.player.controller.flightModel.position.copy(startPos);
       this.player.controller.flightModel.velocity.copy(carrier.getForward().multiplyScalar(140));
@@ -224,18 +447,33 @@ export class Game {
     this.startMission({ difficulty: this.state.settings.difficulty, skipLaunch: this.state.skipCarrierLaunch });
   }
 
+  /**
+   * Prepares entities for a mission. The player and ground target are built once and then reset
+   * on subsequent runs, so restarting does not churn geometry or leak scene objects.
+   */
   private setupEntities() {
-    if (this.player) this.scene.remove(this.player.visual.group);
     for (const e of this.enemies) e.dispose(this.scene);
     this.enemies = [];
-    if (this.groundTarget) this.scene.remove(this.groundTarget.group);
 
-    this.player = new PlayerAircraft(this.scene);
-    this.groundTarget = new GroundTarget(this.scene, WORLD_LAYOUT.radarSitePosition.clone());
+    if (!this.player) {
+      this.player = new PlayerAircraft(this.scene, this.graphics);
+    } else {
+      this.player.resetForMission();
+    }
+
+    if (!this.groundTarget) {
+      // Seat the installation on the terrain the generator actually produced, so it never floats
+      // above or sinks into the radar plateau.
+      const radarPos = WORLD_LAYOUT.radarSitePosition.clone();
+      radarPos.y = this.world.terrain.radarPadHeight;
+      this.groundTarget = new GroundTarget(this.scene, radarPos, this.graphics);
+    } else {
+      this.groundTarget.resetForMission();
+    }
   }
 
   private placeOnCatapult() {
-    const carrier = this.worldBuilder.carrier;
+    const carrier = this.world.carrier;
     const { start } = carrier.getCatapultWorld();
     const fm = this.player.controller.flightModel;
     fm.position.copy(start);
@@ -254,8 +492,10 @@ export class Game {
   private startLoop() {
     const loop = (now: number) => {
       requestAnimationFrame(loop);
-      let rawDt = (now - this.lastTime) / 1000;
+      const frameTimeMs = now - this.lastTime;
+      let rawDt = frameTimeMs / 1000;
       this.lastTime = now;
+      // Clamp so a tab switch or a GC pause cannot teleport the simulation.
       rawDt = Math.min(rawDt, MAX_FRAME_DT);
 
       this.frameCount += 1;
@@ -264,6 +504,12 @@ export class Game {
         this.fpsEl.textContent = `${Math.round(this.frameCount / this.fpsTimer)} FPS`;
         this.frameCount = 0;
         this.fpsTimer = 0;
+      }
+      this.perf.sample(rawDt, frameTimeMs);
+
+      // Dynamic resolution only runs during gameplay, where the cost actually varies.
+      if (this.state.screen === 'playing' && !this.state.paused) {
+        this.adaptive.update(frameTimeMs, rawDt);
       }
 
       if (this.state.screen === 'playing' || this.state.screen === 'paused') {
@@ -275,11 +521,13 @@ export class Game {
       if (this.state.screen === 'playing') {
         this.accumulator += rawDt;
         let steps = 0;
+        this.perf.beginSubsystem('sim');
         while (this.accumulator >= FIXED_TIMESTEP && steps < 6) {
           this.fixedUpdate(FIXED_TIMESTEP);
           this.accumulator -= FIXED_TIMESTEP;
           steps += 1;
         }
+        this.perf.endSubsystem('sim');
       }
       this.input.endFrame();
       this.render(rawDt);
@@ -293,12 +541,31 @@ export class Game {
     }
     if (this.state.paused || this.tacticalMap.isVisible()) return;
 
-    this.worldBuilder.update(dt, this.mission.elapsedTime + this.missionStartElapsed);
+    this.world.update(dt, this.camera.position, this.player.getPosition());
     this.groundTarget.update(dt, this.mission.elapsedTime);
 
     if (this.input.consumeJustPressed('cycleCamera')) {
       this.cameraMode = CAMERA_MODES[(CAMERA_MODES.indexOf(this.cameraMode) + 1) % CAMERA_MODES.length];
-      this.cameraModeChanged = true;
+      // Immediate, stable transition: snap the rig instead of easing between two very
+      // different boom positions.
+      this.cameraRig.snap();
+      this.cockpit.setVisible(this.cameraMode === 'cockpit');
+    }
+
+    // Landing gear and flaps. Both are on a short cooldown inside the controller so a held key
+    // cannot chatter the state.
+    if (this.input.consumeJustPressed('toggleGear')) {
+      const before = this.player.controller.flightModel.gearDown;
+      const after = this.player.controller.toggleGear();
+      if (after !== before) {
+        this.audio.menuConfirm();
+        this.mission.radioMessage('Viper One', after ? 'Gear down and locked.' : 'Gear up.');
+      }
+    }
+    if (this.input.consumeJustPressed('toggleFlaps')) {
+      const before = this.player.controller.flightModel.flapsDown;
+      const after = this.player.controller.toggleFlaps();
+      if (after !== before) this.audio.menuConfirm();
     }
 
     this.updateLaunchSequence();
@@ -316,7 +583,7 @@ export class Game {
         0,
         1,
       );
-      const carrier = this.worldBuilder.carrier;
+      const carrier = this.world.carrier;
       const { start } = carrier.getCatapultWorld();
       this.player.controller.flightModel.position.copy(start);
       this.player.controller.flightModel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), carrier.getForward());
@@ -324,7 +591,7 @@ export class Game {
     } else if (this.launchPhase === 'catapult') {
       this.catapultTimer += dt;
       const t = Math.min(1, this.catapultTimer / CATAPULT_DURATION);
-      const carrier = this.worldBuilder.carrier;
+      const carrier = this.world.carrier;
       const fm = this.player.controller.flightModel;
       const speed = THREE.MathUtils.lerp(4, CATAPULT_LAUNCH_SPEED, t);
       fm.velocity.copy(carrier.getForward().multiplyScalar(speed));
@@ -348,6 +615,7 @@ export class Game {
       this.updateLandingLogic(dt);
     }
 
+    this.emitDamageEffects(dt);
     this.effects.update(dt);
     this.audio.updateEngine(this.player.controller.flightModel.throttle, this.player.controller.flightModel.afterburnerActive);
 
@@ -368,7 +636,7 @@ export class Game {
     }
 
     if (this.mission.stage === 'rtb') {
-      const carrier = this.worldBuilder.carrier;
+      const carrier = this.world.carrier;
       const dist = this.player.getPosition().distanceTo(carrier.getPosition());
       if (dist < 1600) this.mission.enterLandingStage();
     }
@@ -392,8 +660,41 @@ export class Game {
   private spawnEnemies() {
     if (this.enemies.length > 0) return;
     const diff = DIFFICULTY_TABLE[this.state.settings.difficulty];
-    this.enemies.push(new EnemyAircraft(this.scene, WORLD_LAYOUT.enemySpawnA.clone(), diff));
-    this.enemies.push(new EnemyAircraft(this.scene, WORLD_LAYOUT.enemySpawnB.clone(), diff));
+    this.enemies.push(new EnemyAircraft(this.scene, WORLD_LAYOUT.enemySpawnA.clone(), diff, this.graphics));
+    this.enemies.push(new EnemyAircraft(this.scene, WORLD_LAYOUT.enemySpawnB.clone(), diff, this.graphics));
+  }
+
+  /**
+   * Emits trailing smoke/sparks from damaged aircraft and the destroyed radar site.
+   * Rate-limited inside each entity so the particle budget stays bounded.
+   */
+  private emitDamageEffects(dt: number) {
+    void dt;
+    const playerHealth = this.player.controller.healthFraction();
+    if (this.player.isAlive() && playerHealth < 0.55) {
+      const severity = 1 - playerHealth;
+      // Emit from one engine point per frame, alternating, to halve the particle rate.
+      const points = this.player.getDamageWorldPositions();
+      const point = points[this.frameCount % points.length];
+      if (point && Math.random() < 0.55) {
+        this.effects.damageSmoke(point, severity);
+      }
+    }
+
+    for (const enemy of this.enemies) {
+      if (!enemy.isAlive()) continue;
+      if (enemy.consumeSmokeTick()) {
+        const points = enemy.getDamageWorldPositions();
+        const point = points[0];
+        if (point) this.effects.damageSmoke(point, 1 - enemy.controller.healthFraction());
+      }
+    }
+
+    if (this.groundTarget.consumeSmokeTick()) {
+      const points = this.groundTarget.getDamageWorldPositions();
+      const point = points[this.frameCount % points.length];
+      if (point) this.effects.damageSmoke(point, 0.85);
+    }
   }
 
   private updateLaunchSequence() {
@@ -465,14 +766,25 @@ export class Game {
       scene: this.scene,
       player: this.player,
       hostileTargets,
-      civilianStructures: this.worldBuilder.terrain.civilianStructures,
+      civilianStructures: this.world.terrain.civilianStructures,
       effects: this.effects,
       audio: this.audio,
     });
     for (const ev of events) {
       if (ev.type === 'civilian-hit') this.player.civilianStrikes += 1;
-      if (ev.type === 'target-destroyed' && ev.targetId === this.groundTarget.id) {
-        this.effects.smokePuff(this.groundTarget.getPosition(), 5);
+      if (ev.type === 'target-destroyed') {
+        if (ev.targetId === this.groundTarget.id) {
+          // A bigger, longer secondary blast for the installation.
+          const pos = this.groundTarget.getPosition();
+          this.effects.explosion(pos, 2.6);
+          this.effects.explosion(this.tmpVec.copy(pos).add(new THREE.Vector3(4, -2, 3)), 1.7);
+        } else {
+          const enemy = this.enemies.find((e) => e.id === ev.targetId);
+          if (enemy) {
+            this.effects.explosion(enemy.getPosition(), 1.7);
+            enemy.setVisible(false);
+          }
+        }
       }
     }
   }
@@ -480,41 +792,54 @@ export class Game {
   private updateCrashChecks(_dt: number) {
     if (!this.player.isAlive()) return;
     const pos = this.player.getPosition();
-    const carrier = this.worldBuilder.carrier;
+    const carrier = this.world.carrier;
     const contact = CollisionSystem.carrierContact(pos, carrier);
 
     if (contact === 'hull') {
-      this.crashPlayer();
+      this.crashPlayer('hull');
       return;
     }
     if (contact === 'none') {
-      if (CollisionSystem.oceanCrash(pos) || CollisionSystem.terrainCrash(pos, this.worldBuilder.terrain, this.player.getCollisionRadius())) {
-        this.crashPlayer();
+      if (CollisionSystem.oceanCrash(pos)) {
+        this.crashPlayer('water');
+        return;
+      }
+      if (CollisionSystem.terrainCrash(pos, this.world.terrain, this.player.getCollisionRadius())) {
+        this.crashPlayer('ground');
         return;
       }
     }
     for (const enemy of this.enemies) {
       if (!enemy.isAlive()) continue;
       if (CollisionSystem.aircraftCollision(pos, this.player.getCollisionRadius(), enemy.getPosition(), enemy.getCollisionRadius())) {
-        this.crashPlayer();
+        this.effects.explosion(enemy.getPosition(), 1.6);
         enemy.applyDamage(999);
-        this.effects.explosion(enemy.getPosition(), 1.4);
+        enemy.setVisible(false);
+        this.crashPlayer('midair');
         return;
       }
     }
   }
 
-  private crashPlayer() {
+  private crashPlayer(cause: 'water' | 'ground' | 'hull' | 'midair' = 'ground') {
     if (!this.player.isAlive()) return;
-    this.effects.explosion(this.player.getPosition(), 1.6);
+    const pos = this.player.getPosition();
+    this.effects.explosion(pos, 1.9);
+    if (cause === 'water') {
+      this.effects.waterSplash(pos, 2.2);
+    } else if (cause === 'ground') {
+      this.effects.groundImpact(pos);
+    }
     this.audio.explosion();
+    this.effects.addShake(1.6);
     this.player.controller.applyDamage(999);
+    this.player.setVisible(false);
   }
 
   private updateLandingLogic(_dt: number) {
     if (this.mission.stage !== 'landing') return;
     const pos = this.player.getPosition();
-    const carrier = this.worldBuilder.carrier;
+    const carrier = this.world.carrier;
     const contact = CollisionSystem.carrierContact(pos, carrier);
     if (contact === 'hull') {
       this.crashPlayer();
@@ -562,57 +887,110 @@ export class Game {
   // ------------------------------------------------------------------
 
   private render(rawDt: number) {
-    if (this.state.screen === 'playing' && !this.state.paused && !this.tacticalMap.isVisible()) {
+    const playing = this.state.screen === 'playing' && !this.state.paused && !this.tacticalMap.isVisible();
+
+    if (playing) {
+      this.perf.beginSubsystem('camera');
       this.updateCamera(rawDt);
+      this.perf.endSubsystem('camera');
+
+      this.perf.beginSubsystem('hud');
       this.hud.render(this.computeHUDData(), rawDt);
+      this.perf.endSubsystem('hud');
     } else {
+      // Drain queued mouse motion so the view does not lurch when gameplay resumes.
       this.input.consumeMouseDelta();
     }
+
     if (this.tacticalMap.isVisible()) {
       this.tacticalMap.render(this.computeMapContacts(), this.mission.objectiveText());
     }
+
     this.fpsEl.style.display = this.state.settings.showFps ? 'block' : 'none';
-    this.renderer.render(this.scene, this.camera);
+
+    this.perf.beginSubsystem('draw');
+    // Postprocessing composites when available; otherwise fall straight through to the renderer.
+    if (!this.post?.render(rawDt)) {
+      this.renderer.render(this.scene, this.camera);
+    }
+    this.perf.endSubsystem('draw');
+
+    this.perf.render(this.renderer, {
+      activeParticles: this.effects.getActiveParticleCount(),
+      activeMissiles: this.combat.missiles.length,
+      terrainDetail: `${this.graphics.terrainSegments} seg`,
+      quality: this.effectiveGraphicsLabel(),
+    });
   }
 
-  private updateCamera(_dt: number) {
+  private updateCamera(dt: number) {
     const fm = this.player.controller.flightModel;
-    const shake = this.state.settings.reducedScreenShake ? new THREE.Vector3() : this.effects.getShakeOffset();
 
+    // Free-look from the mouse.
     const mouseDelta = this.input.consumeMouseDelta();
     const sens = this.input.sensitivity;
     this.lookYawDeg = THREE.MathUtils.clamp(this.lookYawDeg - mouseDelta.x * sens * 0.15, -55, 55);
     this.lookPitchDeg = THREE.MathUtils.clamp(this.lookPitchDeg - mouseDelta.y * sens * 0.15, -30, 30);
-    const lookQuat = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(THREE.MathUtils.degToRad(this.lookPitchDeg), THREE.MathUtils.degToRad(this.lookYawDeg), 0, 'YXZ'),
-    );
 
-    if (this.cameraMode === 'cockpit') {
-      const offset = new THREE.Vector3(0, 0.55, -0.3).applyQuaternion(fm.quaternion);
-      this.camera.position.copy(fm.position).add(offset).add(shake);
-      this.camera.quaternion.copy(fm.quaternion).multiply(lookQuat);
-    } else {
-      const back = this.cameraMode === 'chase' ? 7.5 : 26;
-      const up = this.cameraMode === 'chase' ? 2.4 : 8;
-      const orientedQuat = fm.quaternion.clone().multiply(lookQuat);
-      const offset = new THREE.Vector3(0, up, back).applyQuaternion(orientedQuat);
-      const desired = fm.position.clone().add(offset);
-      if (this.cameraModeChanged) {
-        this.camera.position.copy(desired).add(shake);
-      } else {
-        this.camera.position.lerp(desired.add(shake), this.cameraMode === 'chase' ? 0.35 : 0.12);
-      }
-      const lookTarget = fm.position.clone().addScaledVector(fm.getForward(), 8);
-      this.camera.lookAt(lookTarget);
+    const noShake = this.state.settings.reducedScreenShake || this.state.settings.reducedMotion;
+    if (noShake) this.tmpShake.set(0, 0, 0);
+    else this.effects.getShakeOffset(this.tmpShake);
+
+    // Populate the reusable rig input rather than allocating a new object each frame.
+    this.rigInput.position.copy(fm.position);
+    this.rigInput.quaternion.copy(fm.quaternion);
+    this.rigInput.forward.copy(fm.getForward(this.tmpForward));
+    this.rigInput.speed = fm.getSpeed();
+    this.rigInput.afterburner = fm.afterburnerActive;
+    this.rigInput.rollDeg = fm.getRollDegrees();
+    this.rigInput.groundHeight = this.world.getSurfaceHeightAt(fm.position.x, fm.position.z);
+    this.rigInput.lookYawDeg = this.lookYawDeg;
+    this.rigInput.lookPitchDeg = this.lookPitchDeg;
+    // `shake` already aliases tmpShake, and speedFov off means we hold the base FOV.
+    if (!this.state.settings.speedFov) {
+      this.rigInput.speed = 0;
+      this.rigInput.afterburner = false;
     }
-    this.cameraModeChanged = false;
+
+    this.cameraRig.update(this.camera, this.cameraMode, this.rigInput, dt);
+
+    // Cockpit buffet: afterburner thrust, low-altitude turbulence and damage all add vibration.
+    const health = this.player.controller.healthFraction();
+    const lowAltTurbulence = fm.position.y < 90 ? 0.45 : 0;
+    const vibration = Math.min(
+      1,
+      (fm.afterburnerActive ? 0.5 : 0) + lowAltTurbulence + (1 - health) * 0.6,
+    );
+    this.cockpit.update(dt, health, vibration, this.state.settings.reducedMotion);
+
+    // Hide the player's own airframe in cockpit view so it does not occlude the eye point.
+    this.player.visualRoot.visible = this.cameraMode !== 'cockpit';
   }
 
-  private onResize() {
+  private onResize = () => {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-  }
+    this.post?.setSize(window.innerWidth, window.innerHeight);
+    this.adaptive.setBasePixelRatio(
+      Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO, this.graphics.maxPixelRatio),
+    );
+  };
+
+  private onContextLost = (event: Event) => {
+    // Preventing the default lets the browser attempt a restore instead of killing the context.
+    event.preventDefault();
+    console.warn('[Game] WebGL context lost — pausing until it is restored.');
+    if (this.state.screen === 'playing') this.togglePause(true);
+  };
+
+  private onContextRestored = () => {
+    console.warn('[Game] WebGL context restored — reapplying renderer state.');
+    applyRendererQuality(this.renderer, this.graphics);
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.post?.setSize(window.innerWidth, window.innerHeight);
+    this.cameraRig.snap();
+  };
 
   // ------------------------------------------------------------------
   // HUD / Map data assembly
@@ -638,7 +1016,7 @@ export class Game {
     const currentTarget = targets.find((t) => t.id === this.player.currentTargetId) ?? null;
 
     const waypoint = this.mission.currentWaypoint();
-    const carrier = this.worldBuilder.carrier;
+    const carrier = this.world.carrier;
     const waypointForHud = this.mission.stage === 'rtb' || this.mission.stage === 'landing' ? carrier.getPosition() : waypoint;
     const waypointLabel =
       this.mission.stage === 'to_alpha' ? 'WAYPOINT ALPHA' :
@@ -718,7 +1096,7 @@ export class Game {
     const contacts: MapContact[] = [];
     const fm = this.player.controller.flightModel;
     contacts.push({ kind: 'player', x: fm.position.x, z: fm.position.z, headingDeg: fm.getHeadingDegrees(), label: 'VIPER 1' });
-    const carrier = this.worldBuilder.carrier;
+    const carrier = this.world.carrier;
     contacts.push({ kind: 'carrier', x: carrier.getPosition().x, z: carrier.getPosition().z, label: 'RESOLUTE' });
     for (const e of this.enemies) {
       if (!e.isAlive()) continue;
@@ -734,9 +1112,9 @@ export class Game {
     }
     contacts.push({
       kind: 'island',
-      x: this.worldBuilder.terrain.mainIslandCenter.x,
-      z: this.worldBuilder.terrain.mainIslandCenter.z,
-      radius: this.worldBuilder.terrain.mainIslandRadius,
+      x: this.world.terrain.mainIslandCenter.x,
+      z: this.world.terrain.mainIslandCenter.z,
+      radius: this.world.terrain.mainIslandRadius,
     });
     return contacts;
   }

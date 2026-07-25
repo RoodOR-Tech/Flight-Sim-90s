@@ -1,12 +1,9 @@
 import * as THREE from 'three';
-import {
-  buildRockyIsland,
-  buildHillCluster,
-  buildCloud,
-  buildDecorativeBuilding,
-  buildPatrolBoat,
-  mulberry32,
-} from '../game/AssetFactory';
+import { IslandDefinition, PlateauDefinition, TerrainField } from './TerrainField';
+import { GraphicsSettings } from '../rendering/GraphicsPresets';
+import { getConcreteTexture, getRockTexture } from '../rendering/ProceduralTextures';
+import { buildDecorativeBuilding, buildPatrolBoat } from '../game/AssetFactory';
+import { WORLD_LAYOUT } from './WorldLayout';
 
 export interface Landform {
   x: number;
@@ -15,105 +12,259 @@ export interface Landform {
   height: number;
 }
 
-/** Builds the island area: one main landmass with hills, several small rocky islands, clouds,
- * and simple decorative props. Also exposes a cheap cone-falloff height field used for collision. */
 export interface CivilianStructure {
   position: THREE.Vector3;
   radius: number;
 }
 
+const MAIN_ISLAND = { x: 2400, z: -3200, radius: 640 };
+const RADAR_PLATEAU_HEIGHT = 42;
+
+// Biome colours, blended per-vertex by elevation and slope.
+const COLOR_SAND = new THREE.Color(0xcbb894);
+const COLOR_SHORE_ROCK = new THREE.Color(0x8d8474);
+const COLOR_GRASS = new THREE.Color(0x51603c);
+const COLOR_GRASS_DRY = new THREE.Color(0x6d7043);
+const COLOR_ROCK = new THREE.Color(0x6f6858);
+const COLOR_ROCK_HIGH = new THREE.Color(0x8a8578);
+
+/**
+ * The island area: one main landmass plus smaller outlying islands, generated from the
+ * TerrainField height function and coloured per-vertex by elevation/slope biome rules.
+ *
+ * `getHeightAt` delegates to the same field used to build the mesh, so collision matches visuals.
+ */
 export class Terrain {
+  field: TerrainField;
   landforms: Landform[] = [];
   civilianStructures: CivilianStructure[] = [];
-  mainIslandCenter = new THREE.Vector3(2400, 0, -3200);
-  mainIslandRadius = 620;
+  mainIslandCenter = new THREE.Vector3(MAIN_ISLAND.x, 0, MAIN_ISLAND.z);
+  mainIslandRadius = MAIN_ISLAND.radius;
+  /** Height the radar site sits at, sampled from the field so the model never floats or sinks. */
+  radarPadHeight = RADAR_PLATEAU_HEIGHT;
 
-  constructor(scene: THREE.Scene) {
-    // Main island
-    const mainIsland = buildRockyIsland(this.mainIslandRadius, 70, 7);
-    mainIsland.position.set(this.mainIslandCenter.x, 0, this.mainIslandCenter.z);
-    mainIsland.scale.set(1, 1, 1);
-    scene.add(mainIsland);
-    this.landforms.push({ x: this.mainIslandCenter.x, z: this.mainIslandCenter.z, radius: this.mainIslandRadius, height: 65 });
+  private meshes: THREE.Mesh[] = [];
+  private props: THREE.Object3D[] = [];
+  private terrainMaterial: THREE.MeshStandardMaterial;
 
-    const hills = buildHillCluster(11);
-    hills.position.set(this.mainIslandCenter.x - 120, 0, this.mainIslandCenter.z + 80);
-    scene.add(hills);
-    this.landforms.push({ x: this.mainIslandCenter.x - 120, z: this.mainIslandCenter.z + 80, radius: 130, height: 40 });
+  constructor(private scene: THREE.Scene, settings: GraphicsSettings) {
+    const islands: IslandDefinition[] = [
+      {
+        cx: MAIN_ISLAND.x,
+        cz: MAIN_ISLAND.z,
+        radius: MAIN_ISLAND.radius,
+        amplitude: 132,
+        seed: 7,
+        ridgeFrequency: 4.4,
+        ridgeWeight: 0.55,
+      },
+    ];
 
-    // Decorative buildings & radio tower on the main island
-    const warehouse = buildDecorativeBuilding('warehouse');
-    warehouse.position.set(this.mainIslandCenter.x + 200, 4, this.mainIslandCenter.z + 250);
-    scene.add(warehouse);
-    this.civilianStructures.push({ position: warehouse.position.clone(), radius: 10 });
-
-    const hut1 = buildDecorativeBuilding('hut');
-    hut1.position.set(this.mainIslandCenter.x + 260, 4, this.mainIslandCenter.z + 210);
-    scene.add(hut1);
-    this.civilianStructures.push({ position: hut1.position.clone(), radius: 4 });
-    const hut2 = buildDecorativeBuilding('hut');
-    hut2.position.set(this.mainIslandCenter.x + 150, 4, this.mainIslandCenter.z + 300);
-    scene.add(hut2);
-    this.civilianStructures.push({ position: hut2.position.clone(), radius: 4 });
-
-    const tower = buildDecorativeBuilding('tower');
-    tower.position.set(this.mainIslandCenter.x + 320, 4, this.mainIslandCenter.z + 180);
-    scene.add(tower);
-    this.civilianStructures.push({ position: tower.position.clone(), radius: 3 });
-
-    // A few small rocky islands scattered around the combat area
-    const rand = mulberry32(42);
-    for (let i = 0; i < 6; i++) {
-      const angle = rand() * Math.PI * 2;
-      const dist = 1400 + rand() * 3400;
-      const x = Math.cos(angle) * dist;
-      const z = Math.sin(angle) * dist - 900;
-      const radius = 35 + rand() * 90;
-      const height = 15 + rand() * 45;
-      const island = buildRockyIsland(radius, height, 100 + i);
-      island.position.set(x, 0, z);
-      scene.add(island);
-      this.landforms.push({ x, z, radius, height });
+    // Outlying rocky islets, deterministically placed around the combat area.
+    const isletSpecs: Array<[number, number, number, number, number]> = [
+      // [x, z, radius, amplitude, seed]
+      [-1850, -1450, 120, 46, 31],
+      [900, -4600, 165, 62, 47],
+      [3550, -1750, 140, 54, 59],
+      [-900, -3800, 95, 34, 71],
+      [3900, -4100, 110, 44, 83],
+      [1500, 900, 85, 28, 97],
+    ];
+    for (const [x, z, radius, amplitude, seed] of isletSpecs) {
+      islands.push({ cx: x, cz: z, radius, amplitude, seed, ridgeFrequency: 5.6, ridgeWeight: 0.68 });
     }
 
-    // Small patrol boat near the island shoreline, purely decorative
+    // Flatten a pad for the radar station so the installation sits on level ground.
+    const plateaus: PlateauDefinition[] = [
+      {
+        cx: WORLD_LAYOUT.radarSitePosition.x,
+        cz: WORLD_LAYOUT.radarSitePosition.z,
+        radius: 58,
+        height: RADAR_PLATEAU_HEIGHT,
+        falloff: 95,
+      },
+    ];
+
+    this.field = new TerrainField(islands, plateaus);
+    this.radarPadHeight = this.field.heightAt(
+      WORLD_LAYOUT.radarSitePosition.x,
+      WORLD_LAYOUT.radarSitePosition.z,
+    );
+
+    for (const island of islands) {
+      this.landforms.push({ x: island.cx, z: island.cz, radius: island.radius, height: island.amplitude });
+    }
+
+    const rockTexture = getRockTexture();
+    rockTexture.repeat.set(28, 28);
+    this.terrainMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      map: rockTexture,
+      roughness: 0.94,
+      metalness: 0.02,
+      flatShading: false,
+    });
+
+    for (const island of islands) {
+      const isMain = island.radius === MAIN_ISLAND.radius;
+      const segments = isMain ? settings.terrainSegments : Math.max(32, Math.floor(settings.terrainSegments * 0.35));
+      const mesh = this.buildIslandMesh(island, segments);
+      mesh.receiveShadow = settings.shadowsEnabled && isMain;
+      this.meshes.push(mesh);
+      scene.add(mesh);
+    }
+
+    this.buildProps(settings);
+  }
+
+  /**
+   * Builds one island as a displaced grid. The grid extends slightly past the island radius so
+   * the shoreline closes below sea level and no gap shows between land and water.
+   */
+  private buildIslandMesh(island: IslandDefinition, segments: number): THREE.Mesh {
+    const extent = island.radius * 1.18;
+    const size = extent * 2;
+    const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+    geometry.rotateX(-Math.PI / 2);
+
+    const pos = geometry.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(pos.count * 3);
+    const color = new THREE.Color();
+
+    for (let i = 0; i < pos.count; i++) {
+      const localX = pos.getX(i);
+      const localZ = pos.getZ(i);
+      const worldX = localX + island.cx;
+      const worldZ = localZ + island.cz;
+
+      let h = this.field.heightAt(worldX, worldZ);
+      // Push the outer skirt below the waterline so the island visually seats into the sea.
+      if (h <= 0.02) h = -3.2;
+      pos.setY(i, h);
+
+      const slope = this.field.slopeAt(worldX, worldZ, 3);
+      this.biomeColor(h, slope, color);
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+    }
+
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+
+    const mesh = new THREE.Mesh(geometry, this.terrainMaterial);
+    mesh.position.set(island.cx, 0, island.cz);
+    return mesh;
+  }
+
+  /** Elevation + slope driven biome blend: sand → grass → rock → bare high rock. */
+  private biomeColor(height: number, slopeRad: number, out: THREE.Color): THREE.Color {
+    const slopeT = THREE.MathUtils.clamp(slopeRad / 0.95, 0, 1);
+
+    if (height < 3.5) {
+      // Beach / tidal shelf, turning rocky where the shore is steep.
+      out.copy(COLOR_SAND).lerp(COLOR_SHORE_ROCK, slopeT);
+      return out;
+    }
+    if (height < 34) {
+      const t = (height - 3.5) / 30.5;
+      out.copy(COLOR_SAND).lerp(COLOR_GRASS, THREE.MathUtils.smoothstep(t, 0, 1));
+      // Steep faces stay bare rock even at low elevation.
+      out.lerp(COLOR_ROCK, slopeT * 0.75);
+      return out;
+    }
+    if (height < 82) {
+      const t = (height - 34) / 48;
+      out.copy(COLOR_GRASS).lerp(COLOR_GRASS_DRY, t);
+      out.lerp(COLOR_ROCK, Math.max(t * 0.55, slopeT * 0.85));
+      return out;
+    }
+    const t = THREE.MathUtils.clamp((height - 82) / 50, 0, 1);
+    out.copy(COLOR_ROCK).lerp(COLOR_ROCK_HIGH, t);
+    return out;
+  }
+
+  /** Places the coastal settlement, radio tower, patrol boat and distant escorts. */
+  private buildProps(settings: GraphicsSettings) {
+    const concrete = getConcreteTexture();
+    void concrete;
+
+    // Civilian settlement on a gentler stretch of coast, east of the radar pad.
+    const settlement: Array<{ kind: 'hut' | 'warehouse' | 'tower'; x: number; z: number; radius: number }> = [
+      { kind: 'warehouse', x: MAIN_ISLAND.x + 230, z: MAIN_ISLAND.z + 300, radius: 10 },
+      { kind: 'hut', x: MAIN_ISLAND.x + 296, z: MAIN_ISLAND.z + 254, radius: 4 },
+      { kind: 'hut', x: MAIN_ISLAND.x + 186, z: MAIN_ISLAND.z + 352, radius: 4 },
+      { kind: 'hut', x: MAIN_ISLAND.x + 258, z: MAIN_ISLAND.z + 372, radius: 4 },
+      { kind: 'tower', x: MAIN_ISLAND.x + 350, z: MAIN_ISLAND.z + 226, radius: 3 },
+    ];
+
+    for (const s of settlement) {
+      const building = buildDecorativeBuilding(s.kind);
+      const groundY = this.field.heightAt(s.x, s.z);
+      building.position.set(s.x, groundY, s.z);
+      // Face buildings roughly downhill so they read as sited on the terrain.
+      const n = this.field.normalAt(s.x, s.z, 4);
+      building.rotation.y = Math.atan2(n.x, n.z);
+      building.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.castShadow = settings.shadowsEnabled;
+      });
+      this.scene.add(building);
+      this.props.push(building);
+      this.civilianStructures.push({
+        position: new THREE.Vector3(s.x, groundY + 2, s.z),
+        radius: s.radius,
+      });
+    }
+
+    // Civilian patrol boat offshore.
     const boat = buildPatrolBoat();
-    boat.position.set(this.mainIslandCenter.x - 500, 1.2, this.mainIslandCenter.z + 600);
-    boat.rotation.y = 1.2;
-    scene.add(boat);
+    boat.position.set(MAIN_ISLAND.x - 620, 0.9, MAIN_ISLAND.z + 640);
+    boat.rotation.y = 1.15;
+    this.scene.add(boat);
+    this.props.push(boat);
     this.civilianStructures.push({ position: boat.position.clone(), radius: 7 });
 
-    // Distant carrier task group escorts (decorative silhouettes only)
-    const escort1 = buildPatrolBoat();
-    escort1.scale.set(2.2, 2.2, 2.2);
-    escort1.position.set(900, 1.5, 400);
-    scene.add(escort1);
-    const escort2 = buildPatrolBoat();
-    escort2.scale.set(2.2, 2.2, 2.2);
-    escort2.position.set(-700, 1.5, 500);
-    scene.add(escort2);
-
-    // Clouds
-    const cloudRand = mulberry32(777);
-    for (let i = 0; i < 14; i++) {
-      const cloud = buildCloud(500 + i);
-      const angle = cloudRand() * Math.PI * 2;
-      const dist = cloudRand() * 6000;
-      cloud.position.set(Math.cos(angle) * dist, 260 + cloudRand() * 260, Math.sin(angle) * dist);
-      scene.add(cloud);
+    // Distant task-group escorts (decorative silhouettes).
+    for (const [x, z, rot] of [
+      [980, 430, 0.2],
+      [-760, 560, -0.35],
+    ] as Array<[number, number, number]>) {
+      const escort = buildPatrolBoat();
+      escort.scale.setScalar(2.3);
+      escort.position.set(x, 1.4, z);
+      escort.rotation.y = rot;
+      this.scene.add(escort);
+      this.props.push(escort);
     }
   }
 
-  /** Approximate ground height at (x,z) using a cone falloff per landform - cheap and good enough for arcade collision. */
+  /** Height query used by collision and prop placement — same field that built the mesh. */
   getHeightAt(x: number, z: number): number {
-    let maxHeight = 0;
-    for (const lf of this.landforms) {
-      const dist = Math.hypot(x - lf.x, z - lf.z);
-      if (dist < lf.radius) {
-        const h = lf.height * (1 - dist / lf.radius);
-        if (h > maxHeight) maxHeight = h;
-      }
+    return Math.max(0, this.field.heightAt(x, z));
+  }
+
+  applyQuality(settings: GraphicsSettings) {
+    // Only the main island (the largest mesh) receives shadows; islets are too far to matter.
+    const mainMesh = this.meshes[0];
+    for (const mesh of this.meshes) {
+      mesh.receiveShadow = settings.shadowsEnabled && mesh === mainMesh;
     }
-    return maxHeight;
+    for (const prop of this.props) {
+      prop.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.castShadow = settings.shadowsEnabled;
+      });
+    }
+  }
+
+  dispose() {
+    for (const mesh of this.meshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.meshes = [];
+    for (const prop of this.props) this.scene.remove(prop);
+    this.props = [];
+    this.terrainMaterial.dispose();
   }
 }

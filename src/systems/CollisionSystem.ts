@@ -8,11 +8,17 @@ const HULL_HALF = new THREE.Vector3(12, 4.5, 110);
 const HULL_CENTER_LOCAL = new THREE.Vector3(0, -4, 0);
 const ISLAND_HALF = new THREE.Vector3(4.5, 8, 17);
 const ISLAND_CENTER_LOCAL = new THREE.Vector3(11, 9, -10);
-const DECK_X_HALF = 15.5;
-const DECK_Z_MIN = -108;
-const DECK_Z_MAX = 108;
-const DECK_Y_MIN = 0.9;
-const DECK_Y_MAX = 6;
+export const DECK_X_HALF = 15.5;
+export const DECK_Z_MIN = -108;
+export const DECK_Z_MAX = 108;
+/** Below this local height over the deck footprint the aircraft has struck the ship. */
+export const DECK_Y_MIN = 0.9;
+/**
+ * Capture ceiling above the deck. Deliberately generous (the deck surface itself is at y = 1.5):
+ * the landing is meant to be forgiving, so an aircraft settling anywhere in this band over the
+ * arresting zone is treated as a touchdown rather than flying through untouched.
+ */
+export const DECK_Y_MAX = 9;
 
 const invQuat = new THREE.Quaternion();
 const localPos = new THREE.Vector3();

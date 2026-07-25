@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildMissileVisual } from '../game/AssetFactory';
+import { buildMissileFlare, buildMissileVisual } from '../rendering/models/MissileModel';
 import { Targetable } from '../game/Types';
 
 const MAX_SPEED = 340;
@@ -23,6 +23,9 @@ export class Missile {
   exploded = false;
   hitTarget = false;
   private smokeTimer = 0;
+  private flare: THREE.Mesh;
+  /** Motor burn duration; the flare dies with it, the missile coasts on. */
+  private motorBurnTime = 3.4;
   onSmoke?: (pos: THREE.Vector3) => void;
 
   constructor(scene: THREE.Scene, launchPos: THREE.Vector3, launchDir: THREE.Vector3, target: Targetable | null, owner: MissileOwner) {
@@ -30,7 +33,9 @@ export class Missile {
     this.velocity = launchDir.clone().normalize().multiplyScalar(LAUNCH_SPEED);
     this.target = target;
     this.owner = owner;
-    this.mesh = buildMissileVisual();
+    this.mesh = buildMissileVisual(1);
+    this.flare = buildMissileFlare();
+    this.mesh.add(this.flare);
     this.mesh.position.copy(launchPos);
     scene.add(this.mesh);
   }
@@ -62,8 +67,20 @@ export class Missile {
     this.mesh.position.copy(this.position);
     this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), newDir);
 
+    // Motor flare: bright while burning, flickering, then extinguished for the coast phase.
+    const burning = this.life < this.motorBurnTime;
+    const flareMat = this.flare.material as THREE.MeshBasicMaterial;
+    if (burning) {
+      const flicker = 0.78 + Math.sin(this.life * 62) * 0.22;
+      flareMat.opacity = 0.85 * flicker;
+      this.flare.scale.set(1, 1, flicker);
+    } else {
+      flareMat.opacity = 0;
+      this.flare.visible = false;
+    }
+
     this.smokeTimer -= dt;
-    if (this.smokeTimer <= 0) {
+    if (this.smokeTimer <= 0 && burning) {
       this.smokeTimer = SMOKE_INTERVAL;
       this.onSmoke?.(this.position.clone());
     }

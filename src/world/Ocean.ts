@@ -1,53 +1,120 @@
 import * as THREE from 'three';
+import { Water } from 'three/addons/objects/Water.js';
+import { getWaterNormalTexture } from '../rendering/ProceduralTextures';
+import { GraphicsSettings } from '../rendering/GraphicsPresets';
+import {
+  OCEAN_COLOR,
+  OCEAN_DEEP_COLOR,
+  OCEAN_SIZE,
+  OCEAN_WAVE_SCALE,
+  OCEAN_WAVE_SPEED,
+} from '../rendering/RenderConstants';
 
-const SIZE = 24000;
-const SEGMENTS = 90;
-
-/** A large, gently animated ocean plane. Wave motion is a cheap CPU sine displacement so it
- * stays compatible with scene fog and flat-shaded materials without a custom shader. */
+/**
+ * Ocean surface.
+ *
+ * High/medium quality uses Three's `Water` addon (planar reflection + animated normal distortion),
+ * fed by a procedurally generated normal map so no third-party texture is needed. Low quality
+ * falls back to a cheap animated MeshStandardMaterial plane with no reflection pass.
+ *
+ * Sea level stays a flat plane at y=0 for gameplay purposes; all displacement is visual.
+ */
 export class Ocean {
   mesh: THREE.Mesh;
-  private geometry: THREE.PlaneGeometry;
-  private basePositions: Float32Array;
+  private water: Water | null = null;
+  private fallbackMaterial: THREE.MeshStandardMaterial | null = null;
+  private normalTexture: THREE.DataTexture;
   private elapsed = 0;
 
-  constructor(scene: THREE.Scene) {
-    this.geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEGMENTS, SEGMENTS);
-    this.geometry.rotateX(-Math.PI / 2);
-    this.basePositions = Float32Array.from(this.geometry.attributes.position.array);
+  constructor(private scene: THREE.Scene, settings: GraphicsSettings, sunDirection: THREE.Vector3) {
+    this.normalTexture = getWaterNormalTexture(256);
 
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x0f4c74,
-      flatShading: true,
-      roughness: 0.55,
-      metalness: 0.05,
-    });
-    this.mesh = new THREE.Mesh(this.geometry, material);
+    if (settings.reflectiveWater) {
+      const geometry = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, 1, 1);
+      this.water = new Water(geometry, {
+        textureWidth: settings.waterReflectionResolution,
+        textureHeight: settings.waterReflectionResolution,
+        waterNormals: this.normalTexture,
+        sunDirection: sunDirection.clone(),
+        sunColor: 0xfff0d8,
+        waterColor: OCEAN_COLOR,
+        distortionScale: OCEAN_WAVE_SCALE,
+        fog: scene.fog !== null && scene.fog !== undefined,
+      });
+      this.water.rotation.x = -Math.PI / 2;
+      this.mesh = this.water as unknown as THREE.Mesh;
+    } else {
+      this.mesh = this.buildFallback();
+    }
+
+    this.mesh.position.y = 0;
     this.mesh.receiveShadow = false;
+    // Render the ocean before transparent effects so splashes composite correctly.
+    this.mesh.renderOrder = -10;
     scene.add(this.mesh);
   }
 
-  update(dt: number) {
-    this.elapsed += dt;
-    const pos = this.geometry.attributes.position as THREE.BufferAttribute;
-    const arr = pos.array as Float32Array;
-    const t = this.elapsed;
-    for (let i = 0; i < arr.length; i += 3) {
-      const x = this.basePositions[i];
-      const z = this.basePositions[i + 2];
-      const wave =
-        Math.sin(x * 0.006 + t * 0.7) * 3.2 +
-        Math.sin(z * 0.009 - t * 0.5) * 2.4 +
-        Math.sin((x + z) * 0.015 + t * 1.1) * 1.1;
-      arr[i + 1] = wave;
-    }
-    pos.needsUpdate = true;
-    this.geometry.computeVertexNormals();
+  private buildFallback(): THREE.Mesh {
+    const geometry = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, 1, 1);
+    geometry.rotateX(-Math.PI / 2);
+    const normalMap = this.normalTexture.clone();
+    normalMap.needsUpdate = true;
+    normalMap.wrapS = THREE.RepeatWrapping;
+    normalMap.wrapT = THREE.RepeatWrapping;
+    normalMap.repeat.set(220, 220);
+    this.fallbackMaterial = new THREE.MeshStandardMaterial({
+      color: OCEAN_COLOR,
+      roughness: 0.32,
+      metalness: 0.06,
+      normalMap,
+      normalScale: new THREE.Vector2(0.45, 0.45),
+    });
+    return new THREE.Mesh(geometry, this.fallbackMaterial);
   }
 
+  /** True when this instance is using the reflective Water shader rather than the cheap fallback. */
+  isReflective(): boolean {
+    return this.water !== null;
+  }
+
+  update(dt: number, cameraPosition: THREE.Vector3, sunDirection: THREE.Vector3) {
+    this.elapsed += dt;
+
+    // Keep the finite ocean plane centred under the camera so the player never reaches its edge.
+    // Water.js samples its noise from world-space position, so the wave pattern stays anchored
+    // and does not slide along with the plane.
+    this.mesh.position.x = cameraPosition.x;
+    this.mesh.position.z = cameraPosition.z;
+
+    if (this.water) {
+      const uniforms = this.water.material.uniforms as Record<string, THREE.IUniform>;
+      uniforms.time.value += dt * OCEAN_WAVE_SPEED;
+      (uniforms.sunDirection.value as THREE.Vector3).copy(sunDirection).normalize();
+    } else if (this.fallbackMaterial?.normalMap) {
+      // Scroll the normal map in world space to fake motion without a reflection pass.
+      const map = this.fallbackMaterial.normalMap;
+      map.offset.set(
+        (cameraPosition.x / OCEAN_SIZE) * 220 + this.elapsed * 0.012,
+        (cameraPosition.z / OCEAN_SIZE) * 220 + this.elapsed * 0.008,
+      );
+    }
+  }
+
+  /** Sea level is flat for gameplay/collision; visual displacement is cosmetic only. */
   getHeightAt(_x: number, _z: number): number {
-    // Sea level is treated as a flat plane at y=0 for gameplay/collision purposes;
-    // the visual wave displacement is small and purely cosmetic.
     return 0;
+  }
+
+  getDeepColor(): number {
+    return OCEAN_DEEP_COLOR;
+  }
+
+  dispose() {
+    this.scene.remove(this.mesh);
+    this.mesh.geometry?.dispose();
+    if (this.water) {
+      (this.water.material as THREE.Material).dispose();
+    }
+    this.fallbackMaterial?.dispose();
   }
 }

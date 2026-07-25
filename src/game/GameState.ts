@@ -1,4 +1,5 @@
 import { Difficulty } from './Constants';
+import { GraphicsQuality } from '../rendering/GraphicsPresets';
 
 export type AppScreen =
   | 'loading'
@@ -17,6 +18,16 @@ export interface Settings {
   muted: boolean;
   reducedScreenShake: boolean;
   showFps: boolean;
+  /** Graphics preset; 'auto' lets AdaptiveQuality pick and tune. */
+  graphicsQuality: GraphicsQuality;
+  /** Chase-camera spring damping scale (1 = default firmness). */
+  cameraDamping: number;
+  /** Whether FOV widens with speed / afterburner. */
+  speedFov: boolean;
+  /** Master switch that disables camera shake and other non-essential motion. */
+  reducedMotion: boolean;
+  /** Developer performance overlay. */
+  showPerfOverlay: boolean;
 }
 
 export interface SessionBest {
@@ -33,6 +44,11 @@ export class GameState {
     muted: false,
     reducedScreenShake: false,
     showFps: false,
+    graphicsQuality: 'auto',
+    cameraDamping: 1,
+    speedFov: true,
+    reducedMotion: false,
+    showPerfOverlay: false,
   };
   skipCarrierLaunch = false;
   sessionBest: SessionBest | null = null;

@@ -26,6 +26,11 @@ export interface FlightModelConfig {
   maxYawRate: number;
   throttleRate: number;
   maxHealth: number;
+  /**
+   * Arcade multiplier on the physically-derived banked-turn rate (g*tan(bank)/V).
+   * 1 = true-to-life (very sluggish on a keyboard); ~3 gives a responsive but still bank-driven turn.
+   */
+  turnRateFactor: number;
 }
 
 export const DEFAULT_FLIGHT_CONFIG: FlightModelConfig = {
@@ -41,6 +46,7 @@ export const DEFAULT_FLIGHT_CONFIG: FlightModelConfig = {
   maxYawRate: 0.55,
   throttleRate: 0.55,
   maxHealth: 100,
+  turnRateFactor: 3.4,
 };
 
 const AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -68,6 +74,13 @@ export class FlightModel {
   stalling = false;
   onGround = false;
   turbulence = true;
+
+  /**
+   * The control inputs applied on the most recent step. Read-only for consumers — exposed so the
+   * visual layer can deflect ailerons/rudders to match what the pilot is actually commanding,
+   * without the renderer having to duplicate the input mapping.
+   */
+  lastControls: FlightControls = { pitch: 0, roll: 0, yaw: 0, throttleInput: 0, afterburner: false };
 
   constructor(public config: FlightModelConfig = DEFAULT_FLIGHT_CONFIG) {}
 
@@ -102,9 +115,13 @@ export class FlightModel {
   getRollDegrees(): number {
     const right = this.getRight();
     const up = this.getUp();
-    // roll angle derived from how much the right vector dips below/above the horizontal plane
-    const level = new THREE.Vector3(right.x, 0, right.z).normalize();
-    let angle = Math.atan2(right.y, level.length()) * (180 / Math.PI);
+    // Bank angle = how far the right-wing vector dips below the horizontal plane.
+    // The horizontal magnitude must NOT be normalised: since |right| = 1 it equals cos(bank), so
+    // atan2(right.y, horizontal) recovers the true angle. Normalising forces the denominator to 1
+    // and systematically under-reports the bank (a real 45 deg would read as 35 deg).
+    const horizontal = Math.hypot(right.x, right.z);
+    let angle = Math.atan2(right.y, horizontal) * (180 / Math.PI);
+    // atan2 alone cannot distinguish a bank past vertical; use the up-vector to unwrap it.
     if (up.y < 0) angle = angle >= 0 ? 180 - angle : -180 - angle;
     return angle;
   }
@@ -120,8 +137,59 @@ export class FlightModel {
 
   private tmpForward = new THREE.Vector3();
   private tmpUp = new THREE.Vector3();
+  private tmpTurnQuat = new THREE.Quaternion();
+
+  /**
+   * Rotates the aircraft's heading in response to bank angle — the "banking turn".
+   *
+   * Why this is needed: a banked wing tilts its lift vector sideways, and in a real aircraft that
+   * horizontal component is what pulls the nose around the turn. This model's weathervane damping
+   * (below) deliberately removes sideways velocity so the aircraft flies where it points — but that
+   * also cancels the very sideslip that would have produced the turn. Without an explicit heading
+   * rotation, holding a bank changes the aircraft's attitude and nothing else.
+   *
+   * Rate is the standard level-turn expression `g·tan(bank) / V`, applied about the **world** up
+   * axis so the turn stays level rather than corkscrewing with the airframe.
+   */
+  private applyCoordinatedTurn(dt: number, speed: number, up: THREE.Vector3) {
+    // Below flying speed there is not enough airflow over the wing to turn.
+    if (speed < this.config.minControlSpeed) return;
+    // When inverted, pulling on the stick is the correct way to change heading; adding a
+    // level-turn term there would fight the pilot and feel wrong.
+    if (up.y <= 0.1) return;
+
+    const bankDeg = -this.getRollDegrees(); // positive = banked right
+    // Ignore imperceptible bank so level flight holds its heading exactly.
+    if (Math.abs(bankDeg) < 1.5) return;
+
+    // Clamp rather than bail out past vertical: tan() explodes near 90 deg, but simply returning
+    // would create a dead zone where rolling *harder* stops the turn altogether. Clamping means a
+    // knife-edge bank just saturates at the maximum turn rate.
+    const clampedBank = THREE.MathUtils.clamp(bankDeg, -75, 75);
+    const bankRad = THREE.MathUtils.degToRad(clampedBank);
+    // Clamp the divisor so very slow flight cannot produce an unrealistically fast pivot.
+    const effectiveSpeed = Math.max(speed, this.config.stallSpeed);
+    // The bare physical rate is correct but far too sluggish to fly with a keyboard: a 32 deg bank
+    // at 310 kt yields only ~2 deg/s, so a 90 deg course change would take 40 seconds. The arcade
+    // factor scales it into the responsive range this game wants while keeping the shape of the
+    // curve (steeper bank and slower speed both tighten the turn).
+    let turnRate = (GRAVITY * Math.tan(bankRad) * this.config.turnRateFactor) / effectiveSpeed;
+    // Cap the rate so extreme banks stay controllable on a keyboard.
+    turnRate = THREE.MathUtils.clamp(turnRate, -0.9, 0.9);
+
+    // Negative angle about +Y yaws right, matching the yaw-input convention above.
+    this.tmpTurnQuat.setFromAxisAngle(AXIS_Y, -turnRate * dt);
+    // premultiply applies the rotation in world space, so the heading changes without rolling.
+    this.quaternion.premultiply(this.tmpTurnQuat);
+  }
 
   step(dt: number, controls: FlightControls) {
+    this.lastControls.pitch = controls.pitch;
+    this.lastControls.roll = controls.roll;
+    this.lastControls.yaw = controls.yaw;
+    this.lastControls.throttleInput = controls.throttleInput;
+    this.lastControls.afterburner = controls.afterburner;
+
     // Throttle
     this.throttle = THREE.MathUtils.clamp(
       this.throttle + controls.throttleInput * this.config.throttleRate * dt,
@@ -152,6 +220,9 @@ export class FlightModel {
     const qRoll = new THREE.Quaternion().setFromAxisAngle(AXIS_Z, -(rollRate + turbRoll) * dt);
     const qYaw = new THREE.Quaternion().setFromAxisAngle(AXIS_Y, -yawRate * dt);
     this.quaternion.multiply(qYaw).multiply(qPitch).multiply(qRoll);
+    this.quaternion.normalize();
+
+    this.applyCoordinatedTurn(dt, speed, up);
     this.quaternion.normalize();
 
     // --- Forces ---

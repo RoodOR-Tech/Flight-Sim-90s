@@ -102,9 +102,13 @@ export class HUD {
     const cx = w / 2;
     const cy = h / 2;
 
-    if (data.cameraMode === 'cockpit') {
-      this.drawCockpitFrame(w, h);
-    }
+    // A real 3D cockpit is drawn in the scene for cockpit view, so the HUD no longer paints its
+    // own frame. Instead the data columns get a soft dark scrim, and every glyph gets a drop
+    // shadow, so the green stays legible against bright water, sunlit haze or pale terrain.
+    this.drawContrastScrims(w, h);
+    ctx.shadowColor = 'rgba(0, 12, 4, 0.95)';
+    ctx.shadowBlur = 4;
+    ctx.lineJoin = 'round';
 
     this.drawHorizon(cx, cy, data.pitchDeg, data.rollDeg);
     this.drawReticle(cx, cy, data.shootCue);
@@ -112,6 +116,9 @@ export class HUD {
     this.drawTape(20, cy, 'L', Math.round(data.speedKnots));
     this.drawTape(w - 90, cy, 'R', Math.round(data.altitudeFeet));
 
+    // Each label group sets its own fill explicitly rather than inheriting, so no earlier draw
+    // can silently blank the readouts.
+    ctx.fillStyle = GREEN;
     ctx.textAlign = 'left';
     ctx.fillText('SPD', 20, cy - 46);
     ctx.fillText('KTS', 20, cy + 46);
@@ -123,6 +130,7 @@ export class HUD {
     this.drawHeadingTape(cx, 26, data.headingDeg);
 
     // VSI
+    ctx.fillStyle = GREEN;
     ctx.textAlign = 'left';
     const vsiSign = data.vsiFpm >= 0 ? '+' : '';
     ctx.fillText(`VSI ${vsiSign}${Math.round(data.vsiFpm)} FPM`, 20, cy + 90);
@@ -136,6 +144,7 @@ export class HUD {
     }
 
     // Health
+    ctx.fillStyle = GREEN;
     ctx.textAlign = 'left';
     ctx.fillText('AC HEALTH', 20, h - 130);
     this.drawBar(20, h - 112, 140, 12, data.healthFraction, data.healthFraction < 0.3 ? RED : GREEN);
@@ -169,6 +178,7 @@ export class HUD {
     }
 
     // Mission objective / waypoint
+    ctx.fillStyle = GREEN;
     ctx.textAlign = 'center';
     ctx.fillText(data.objectiveText.toUpperCase(), cx, 60);
     if (data.waypointLabel && data.waypointDistance !== null) {
@@ -215,9 +225,45 @@ export class HUD {
     ctx.restore();
   }
 
+  /**
+   * Soft dark gradients behind the left/right data columns and the top/bottom bands.
+   * Keeps HUD text at readable contrast over sun glint or pale sky without boxing it in.
+   */
+  private drawContrastScrims(w: number, h: number) {
+    const ctx = this.ctx;
+    // save/restore is essential here: several HUD labels draw with the inherited fillStyle, so
+    // leaking a gradient out of this method makes them invisible.
+    ctx.save();
+    const colWidth = Math.max(150, w * 0.16);
+
+    // Left column
+    const left = ctx.createLinearGradient(0, 0, colWidth, 0);
+    left.addColorStop(0, 'rgba(0, 10, 5, 0.5)');
+    left.addColorStop(1, 'rgba(0, 10, 5, 0)');
+    ctx.fillStyle = left;
+    ctx.fillRect(0, 0, colWidth, h);
+
+    // Right column
+    const right = ctx.createLinearGradient(w, 0, w - colWidth, 0);
+    right.addColorStop(0, 'rgba(0, 10, 5, 0.5)');
+    right.addColorStop(1, 'rgba(0, 10, 5, 0)');
+    ctx.fillStyle = right;
+    ctx.fillRect(w - colWidth, 0, colWidth, h);
+
+    // Top band behind the heading tape and objective text
+    const top = ctx.createLinearGradient(0, 0, 0, 110);
+    top.addColorStop(0, 'rgba(0, 10, 5, 0.45)');
+    top.addColorStop(1, 'rgba(0, 10, 5, 0)');
+    ctx.fillStyle = top;
+    ctx.fillRect(0, 0, w, 110);
+    ctx.restore();
+  }
+
   private drawTape(x: number, cy: number, _side: string, value: number) {
     const ctx = this.ctx;
+    ctx.strokeStyle = GREEN;
     ctx.strokeRect(x, cy - 20, 62, 40);
+    ctx.fillStyle = GREEN;
     ctx.font = 'bold 18px "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.fillText(String(value), x + 31, cy);
@@ -417,33 +463,6 @@ export class HUD {
       ctx.font = '14px "Courier New", monospace';
       ctx.fillStyle = GREEN;
     }
-  }
-
-  private drawCockpitFrame(w: number, h: number) {
-    const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(10,14,10,0.88)';
-    ctx.beginPath();
-    ctx.moveTo(0, h);
-    ctx.lineTo(0, h * 0.72);
-    ctx.lineTo(w * 0.22, h * 0.62);
-    ctx.lineTo(w * 0.14, h);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(w, h);
-    ctx.lineTo(w, h * 0.72);
-    ctx.lineTo(w * 0.78, h * 0.62);
-    ctx.lineTo(w * 0.86, h);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillRect(0, 0, w, 10);
-    ctx.strokeStyle = GREEN_DIM;
-    ctx.beginPath();
-    ctx.moveTo(w * 0.14, h);
-    ctx.lineTo(w * 0.22, h * 0.62);
-    ctx.moveTo(w * 0.86, h);
-    ctx.lineTo(w * 0.78, h * 0.62);
-    ctx.stroke();
   }
 
   dispose() {

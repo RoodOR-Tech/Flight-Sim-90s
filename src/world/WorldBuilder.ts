@@ -1,57 +1,83 @@
 import * as THREE from 'three';
 import { Ocean } from './Ocean';
 import { Terrain } from './Terrain';
+import { Sky } from './Sky';
+import { Clouds } from './Clouds';
 import { Carrier } from '../entities/Carrier';
+import { GraphicsSettings } from '../rendering/GraphicsPresets';
+import { SUN_AZIMUTH_DEG, SUN_ELEVATION_DEG } from '../rendering/RenderConstants';
+import { WORLD_LAYOUT, WorldLayout } from './WorldLayout';
 
-export interface WorldLayout {
-  carrierStart: THREE.Vector3;
-  carrierHeading: number;
-  waypointAlpha: THREE.Vector3;
-  waypointBravo: THREE.Vector3;
-  enemySpawnA: THREE.Vector3;
-  enemySpawnB: THREE.Vector3;
-  radarSitePosition: THREE.Vector3;
-}
+export { WORLD_LAYOUT };
+export type { WorldLayout };
 
-export const WORLD_LAYOUT: WorldLayout = {
-  carrierStart: new THREE.Vector3(0, 0, 0),
-  carrierHeading: 90,
-  waypointAlpha: new THREE.Vector3(1200, 380, -1650),
-  waypointBravo: new THREE.Vector3(2084, 320, -2778),
-  enemySpawnA: new THREE.Vector3(1750, 420, -2500),
-  enemySpawnB: new THREE.Vector3(2050, 460, -2150),
-  radarSitePosition: new THREE.Vector3(2084, 9.7, -2778),
-};
-
-/** Sets up scene lighting, sky, fog, and constructs the ocean + terrain world objects. */
+/**
+ * Owns the environment: atmosphere, ocean, clouds, terrain and the carrier.
+ *
+ * Construction order matters — the Sky installs scene fog and computes the sun direction, both of
+ * which the Ocean and Clouds need at build time.
+ */
 export class WorldBuilder {
+  sky: Sky;
   ocean: Ocean;
   terrain: Terrain;
+  clouds: Clouds;
   carrier: Carrier;
 
-  constructor(scene: THREE.Scene) {
-    scene.background = new THREE.Color(0x8fc7de);
-    scene.fog = new THREE.Fog(0x9fd0e0, 1400, 7600);
+  private elapsed = 0;
 
-    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x2a3b2a, 0.9);
-    scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xfff4dd, 1.15);
-    sun.position.set(-800, 900, 400);
-    scene.add(sun);
-    const ambient = new THREE.AmbientLight(0x445566, 0.35);
-    scene.add(ambient);
-
-    this.ocean = new Ocean(scene);
-    this.terrain = new Terrain(scene);
-    this.carrier = new Carrier(scene, WORLD_LAYOUT.carrierStart.clone(), WORLD_LAYOUT.carrierHeading);
+  constructor(scene: THREE.Scene, settings: GraphicsSettings) {
+    this.sky = new Sky(scene, settings);
+    this.ocean = new Ocean(scene, settings, this.sky.sunDirection);
+    this.clouds = new Clouds(scene, settings, this.sky.getFogColor());
+    this.terrain = new Terrain(scene, settings);
+    this.carrier = new Carrier(
+      scene,
+      WORLD_LAYOUT.carrierStart.clone(),
+      WORLD_LAYOUT.carrierHeading,
+      settings,
+    );
   }
 
-  update(dt: number, elapsed: number) {
-    this.ocean.update(dt);
-    this.carrier.update(dt, elapsed);
-  }
-
+  /** Terrain height above sea level, or 0 over open water. */
   getGroundHeightAt(x: number, z: number): number {
     return this.terrain.getHeightAt(x, z);
+  }
+
+  /**
+   * Height the camera must stay above at a given position — terrain where there is land,
+   * sea level otherwise.
+   */
+  getSurfaceHeightAt(x: number, z: number): number {
+    return Math.max(0, this.terrain.getHeightAt(x, z));
+  }
+
+  update(dt: number, cameraPosition: THREE.Vector3, playerPosition: THREE.Vector3) {
+    this.elapsed += dt;
+    this.sky.follow(playerPosition);
+    this.ocean.update(dt, cameraPosition, this.sky.sunDirection);
+    this.clouds.update(dt, cameraPosition);
+    this.carrier.update(dt, this.elapsed);
+  }
+
+  applyQuality(settings: GraphicsSettings) {
+    this.sky.applyQuality(settings);
+    this.clouds.applyQuality(settings);
+    this.terrain.applyQuality(settings);
+    this.carrier.applyQuality(settings);
+  }
+
+  /** Reset per-mission animation state without rebuilding geometry. */
+  resetForMission() {
+    this.elapsed = 0;
+    this.carrier.resetPosition(WORLD_LAYOUT.carrierStart.clone(), WORLD_LAYOUT.carrierHeading);
+    this.sky.update(SUN_ELEVATION_DEG, SUN_AZIMUTH_DEG);
+  }
+
+  dispose() {
+    this.sky.dispose();
+    this.ocean.dispose();
+    this.clouds.dispose();
+    this.terrain.dispose();
   }
 }

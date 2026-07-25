@@ -286,6 +286,15 @@ table.results-table td:last-child {
   transition: width 0.2s ease;
 }
 
+.loading-stage {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  color: var(--hud-green-dim);
+  text-transform: uppercase;
+  min-height: 1em;
+}
+
 .subtitle-box {
   position: absolute;
   bottom: 92px;
@@ -311,11 +320,46 @@ table.results-table td:last-child {
   z-index: 15;
 }
 
+/* Developer performance overlay (Settings -> Performance Overlay) */
+.perf-overlay {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 16;
+  padding: 6px 10px;
+  background: rgba(0, 12, 6, 0.72);
+  border: 1px solid var(--panel-border);
+  color: var(--hud-green);
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  min-width: 190px;
+}
+
+.perf-overlay b {
+  color: var(--hud-amber);
+}
+
 .settings-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 10px 14px;
   align-items: center;
+  font-size: 0.85rem;
+}
+
+.settings-grid input[type='checkbox'] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  accent-color: #33ff66;
+}
+
+.settings-note {
+  font-size: 0.72rem;
+  color: var(--hud-green-dim);
+  margin: 8px 0 0;
 }
 
 .mute-toggle {
