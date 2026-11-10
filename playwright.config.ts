@@ -9,7 +9,8 @@ const executablePath =
 
 export default defineConfig({
   testDir: './tests',
-  timeout: 30000,
+  // Generous: CI runners render WebGL in software and run several times slower than a desktop.
+  timeout: 120000,
   fullyParallel: false,
   retries: 0,
   reporter: 'list',
