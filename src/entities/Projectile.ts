@@ -8,6 +8,12 @@ const tracerGeo = new THREE.CylinderGeometry(0.045, 0.045, TRACER_LENGTH, 5);
 tracerGeo.rotateX(Math.PI / 2);
 tracerGeo.translate(0, 0, -TRACER_LENGTH / 2);
 
+// Shared per owner: rounds are spawned ~11 times a second and must not each allocate a material.
+const TRACER_MATERIALS = {
+  player: new THREE.MeshBasicMaterial({ color: 0xbfffcc }),
+  enemy: new THREE.MeshBasicMaterial({ color: 0xffcf7a }),
+};
+
 export type ProjectileOwner = 'player' | 'enemy';
 
 /** A fast cannon round rendered as a short glowing tracer streak; collision is a swept-sphere test each step. */
@@ -32,8 +38,7 @@ export class Projectile {
     }
     this.velocity = dir.multiplyScalar(SPEED);
     this.owner = owner;
-    const mat = new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xbfffcc : 0xffcf7a });
-    this.mesh = new THREE.Mesh(tracerGeo, mat);
+    this.mesh = new THREE.Mesh(tracerGeo, TRACER_MATERIALS[owner]);
     this.mesh.position.copy(this.position);
     this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
     scene.add(this.mesh);

@@ -89,7 +89,6 @@ export class Game {
   private launchPhase: LaunchPhase = 'none';
   private catapultTimer = 0;
   private lastMessageId = -1;
-  private missionStartElapsed = 0;
   private accumulator = 0;
   private lastTime = performance.now();
   private frameCount = 0;
@@ -335,6 +334,7 @@ export class Game {
   }
 
   private goToTitle() {
+    this.stopSpeech();
     this.state.screen = 'title';
     this.hideAllScreens();
     this.title.show();
@@ -360,6 +360,8 @@ export class Game {
 
   private applySettings(s: typeof this.state.settings) {
     this.audio.setMuted(s.muted);
+    if (s.muted) this.stopSpeech();
+    this.state.saveSettings();
     this.input.sensitivity = s.mouseSensitivity;
     this.perf.setVisible(s.showPerfOverlay);
     this.cameraRig.dampingScale = s.cameraDamping;
@@ -408,6 +410,8 @@ export class Game {
     this.audio.resume();
     this.audio.startEngine();
     this.setupEntities();
+    this.player.damageMultiplier = DIFFICULTY_TABLE[result.difficulty].playerDamageMultiplier;
+    this.stopSpeech();
     this.mission.reset();
     this.combat.reset(this.scene);
     this.effects.reset();
@@ -416,7 +420,6 @@ export class Game {
     this.adaptive.reset();
     this.lookYawDeg = 0;
     this.lookPitchDeg = 0;
-    this.missionStartElapsed = 0;
     this.landingResult = 'pending';
     this.lastMessageId = -1;
     this.subtitleEl.style.display = 'none';
@@ -528,8 +531,13 @@ export class Game {
           steps += 1;
         }
         this.perf.endSubsystem('sim');
+        // One-shot key edges are consumed inside fixedUpdate. A rendered frame that ran no sim step
+        // (routine on displays faster than the 60 Hz sim) must keep them for the next step,
+        // otherwise the press is silently lost.
+        if (steps > 0) this.input.endFrame();
+      } else {
+        this.input.endFrame();
       }
-      this.input.endFrame();
       this.render(rawDt);
     };
     requestAnimationFrame(loop);
@@ -767,6 +775,7 @@ export class Game {
       player: this.player,
       hostileTargets,
       civilianStructures: this.world.terrain.civilianStructures,
+      terrainHeightAt: this.terrainHeightAt,
       effects: this.effects,
       audio: this.audio,
     });
@@ -788,6 +797,8 @@ export class Game {
       }
     }
   }
+
+  private terrainHeightAt = (x: number, z: number) => this.world.terrain.getHeightAt(x, z);
 
   private updateCrashChecks(_dt: number) {
     if (!this.player.isAlive()) return;
@@ -1144,10 +1155,19 @@ export class Game {
     }
   }
 
+  private stopSpeech() {
+    try {
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    } catch {
+      // speech synthesis unavailable; nothing to stop
+    }
+  }
+
   private togglePause(forceState?: boolean) {
     const next = forceState !== undefined ? forceState : !this.state.paused;
     this.state.paused = next;
     if (next) {
+      this.stopSpeech();
       this.state.screen = 'paused';
       this.pauseMenu.show();
     } else {
@@ -1168,7 +1188,9 @@ export class Game {
   private endMission(success: boolean, failReason?: string) {
     this.state.screen = success ? 'success' : 'failure';
     this.audio.stopEngine();
-    const enemiesDestroyed = 2 - this.enemies.filter((e) => e.isAlive()).length;
+    this.stopSpeech();
+    // Count actual kills: before the intercept stage no fighters exist, so none were destroyed.
+    const enemiesDestroyed = this.enemies.filter((e) => !e.isAlive()).length;
     const score = calculateScore({
       enemiesDestroyed,
       radarDestroyed: this.groundTarget.destroyed,
@@ -1181,6 +1203,7 @@ export class Game {
     });
     if (!this.state.sessionBest || score.score > this.state.sessionBest.score) {
       this.state.sessionBest = { score: score.score, grade: score.grade };
+      this.state.saveBest();
     }
     this.hud.setVisible(false);
     this.results.show({
@@ -1188,7 +1211,7 @@ export class Game {
       failReason,
       score,
       objectives: [
-        { label: 'Launch from CVN Resolute', complete: true },
+        { label: 'Launch from CVN Resolute', complete: this.launchPhase === 'airborne' },
         { label: 'Destroy two Kestrel-9 fighters', complete: enemiesDestroyed >= 2 },
         { label: 'Destroy coastal radar site', complete: this.groundTarget.destroyed },
         { label: 'Return and land on CVN Resolute', complete: this.landingResult === 'success' },

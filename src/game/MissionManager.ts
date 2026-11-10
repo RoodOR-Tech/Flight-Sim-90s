@@ -42,7 +42,6 @@ export class MissionManager {
   private activeMessageTimer = 0;
   private outsideBoundaryTimer = 0;
   boundaryWarningActive = false;
-  private stageEnteredAt = 0;
   private civilianWarned = false;
 
   reset() {
@@ -54,7 +53,6 @@ export class MissionManager {
     this.activeMessageTimer = 0;
     this.outsideBoundaryTimer = 0;
     this.boundaryWarningActive = false;
-    this.stageEnteredAt = 0;
     this.civilianWarned = false;
   }
 
@@ -71,7 +69,6 @@ export class MissionManager {
   private setStage(stage: MissionStage) {
     if (this.stage === stage) return;
     this.stage = stage;
-    this.stageEnteredAt = this.elapsedTime;
   }
 
   beginFlight() {

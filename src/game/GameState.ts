@@ -1,4 +1,4 @@
-import { Difficulty } from './Constants';
+import { DIFFICULTY_TABLE, Difficulty } from './Constants';
 import { GraphicsQuality } from '../rendering/GraphicsPresets';
 
 export type AppScreen =
@@ -35,6 +35,29 @@ export interface SessionBest {
   grade: string;
 }
 
+const GRAPHICS_QUALITIES: GraphicsQuality[] = ['auto', 'low', 'medium', 'high'];
+const SETTINGS_KEY = 'obb.settings.v1';
+const BEST_KEY = 'obb.best.v1';
+
+function readStored<T>(key: string): Partial<T> | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    // Storage blocked or corrupt; fall back to defaults.
+    return null;
+  }
+}
+
+function writeStored(key: string, value: unknown) {
+  try {
+    globalThis.localStorage?.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage unavailable (private mode, quota); persistence is best-effort.
+  }
+}
+
 /** Small shared bucket of state that many systems read/write across screens. */
 export class GameState {
   screen: AppScreen = 'loading';
@@ -53,4 +76,30 @@ export class GameState {
   skipCarrierLaunch = false;
   sessionBest: SessionBest | null = null;
   paused = false;
+
+  constructor() {
+    // Only accept stored values whose type matches the default, so a stale or hand-edited entry
+    // cannot put the settings into an invalid shape.
+    const stored = readStored<Settings>(SETTINGS_KEY);
+    if (stored) {
+      const target = this.settings as unknown as Record<string, unknown>;
+      for (const [key, value] of Object.entries(stored)) {
+        if (key in target && typeof value === typeof target[key]) target[key] = value;
+      }
+      if (!(this.settings.difficulty in DIFFICULTY_TABLE)) this.settings.difficulty = 'normal';
+      if (!GRAPHICS_QUALITIES.includes(this.settings.graphicsQuality)) this.settings.graphicsQuality = 'auto';
+    }
+    const best = readStored<SessionBest>(BEST_KEY);
+    if (best && typeof best.score === 'number' && typeof best.grade === 'string') {
+      this.sessionBest = { score: best.score, grade: best.grade };
+    }
+  }
+
+  saveSettings() {
+    writeStored(SETTINGS_KEY, this.settings);
+  }
+
+  saveBest() {
+    if (this.sessionBest) writeStored(BEST_KEY, this.sessionBest);
+  }
 }

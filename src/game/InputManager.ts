@@ -23,9 +23,9 @@ export type ActionKey =
 
 const KEY_MAP: Record<string, ActionKey> = {
   KeyW: 'pitchDown',
-  ArrowDown: 'pitchDown',
+  ArrowUp: 'pitchDown',
   KeyS: 'pitchUp',
-  ArrowUp: 'pitchUp',
+  ArrowDown: 'pitchUp',
   KeyA: 'rollLeft',
   ArrowLeft: 'rollLeft',
   KeyD: 'rollRight',
