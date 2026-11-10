@@ -47,6 +47,8 @@ export class PlayerAircraft implements Targetable {
   locked = false;
 
   civilianStrikes = 0;
+  /** Scales incoming weapon damage; set from the difficulty table at mission start. */
+  damageMultiplier = 1;
 
   private missileVisuals: THREE.Object3D[] = [];
   private navLightPhase = 0;
@@ -96,7 +98,7 @@ export class PlayerAircraft implements Targetable {
   }
 
   applyDamage(amount: number): void {
-    this.controller.applyDamage(amount);
+    this.controller.applyDamage(amount * this.damageMultiplier);
   }
 
   canFireCannon(): boolean {

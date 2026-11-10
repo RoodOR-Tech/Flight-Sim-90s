@@ -12,18 +12,6 @@ missile combat, mission objectives and radio chatter — over a modern rendering
 
 ---
 
-## Screenshots
-
-Screenshots are not committed to this repository. Run `npm run dev` and open the app locally to see
-the title screen, briefing, deck launch, chase and cockpit views, tactical map and results screens.
-
-- `docs/screenshot-title.png` — placeholder (not included)
-- `docs/screenshot-deck.png` — placeholder (not included)
-- `docs/screenshot-chase.png` — placeholder (not included)
-- `docs/screenshot-cockpit.png` — placeholder (not included)
-- `docs/screenshot-map.png` — placeholder (not included)
-- `docs/screenshot-results.png` — placeholder (not included)
-
 ## Installation
 
 ```bash
@@ -49,8 +37,8 @@ npm run preview   # serve the production build locally
 ## Tests
 
 ```bash
-npm test          # Vitest unit tests (113 tests / 13 files)
-npm run test:e2e  # Playwright browser smoke tests (3 tests)
+npm test          # Vitest unit tests
+npm run test:e2e  # Playwright browser smoke tests (run `npm run build` first; needs Chromium: `npx playwright install chromium`)
 ```
 
 Unit coverage includes: score calculation, missile-lock eligibility, mission-stage progression,
@@ -67,7 +55,8 @@ npm run assets:optimize      # optimize any GLBs under public/assets -> public/a
 npm run assets:optimize:dry  # report only, write nothing
 ```
 
-The game ships with **no GLB files** — these exist for when you add your own. See `ASSET_GUIDE.md`.
+The game ships with **no GLB files**. Supplied GLBs are currently validated and reported on but not
+yet rendered in-game — see the status note at the top of `ASSET_GUIDE.md`.
 
 ---
 
@@ -95,7 +84,7 @@ hits fail the mission.
 | W / S | Pitch down / pitch up |
 | A / D | Roll left / right |
 | Q / E | Yaw left / right |
-| Arrow keys | Alternate flight controls |
+| Arrow keys | Alternate flight controls (Up = pitch down, Down = pitch up, like W / S) |
 | Shift | Increase throttle |
 | Ctrl | Decrease throttle |
 | B | Afterburner |
@@ -135,7 +124,8 @@ checkbox on the briefing starts you airborne.
 
 Graphics preset (Automatic / Low / Medium / High), performance overlay, mouse sensitivity,
 chase-camera damping, speed-based FOV, reduced screen shake, reduced motion, mute, FPS counter and
-enemy difficulty (Easy / Normal / Hard).
+enemy difficulty (Easy / Normal / Hard). Difficulty changes enemy health, reactions and fire rate
+and how much damage you take. Settings and your best score are saved in the browser's local storage.
 
 ---
 

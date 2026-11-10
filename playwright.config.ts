@@ -1,8 +1,16 @@
+import { existsSync } from 'node:fs';
 import { defineConfig } from '@playwright/test';
+
+// Use a pre-installed Chromium when one is provided (PW_CHROMIUM_PATH, or the path used by some
+// cloud sandboxes); otherwise let Playwright use its own managed browser.
+const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
+const executablePath =
+  process.env.PW_CHROMIUM_PATH ?? (existsSync(SANDBOX_CHROMIUM) ? SANDBOX_CHROMIUM : undefined);
 
 export default defineConfig({
   testDir: './tests',
-  timeout: 30000,
+  // Generous: CI runners render WebGL in software and run several times slower than a desktop.
+  timeout: 120000,
   fullyParallel: false,
   retries: 0,
   reporter: 'list',
@@ -22,9 +30,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         browserName: 'chromium',
-        launchOptions: {
-          executablePath: '/opt/pw-browsers/chromium',
-        },
+        launchOptions: executablePath ? { executablePath } : {},
       },
     },
   ],

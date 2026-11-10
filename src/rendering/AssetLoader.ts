@@ -60,7 +60,7 @@ export class AssetLoader {
   private totalCount = 0;
   private currentLabel = 'Initializing';
 
-  constructor(private renderer?: THREE.WebGLRenderer) {
+  constructor(renderer?: THREE.WebGLRenderer) {
     this.gltfLoader = new GLTFLoader();
 
     // Optional Draco geometry compression. The decoder is fetched from the local three package

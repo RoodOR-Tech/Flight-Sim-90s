@@ -21,6 +21,8 @@ export interface CombatContext {
   player: PlayerAircraft;
   hostileTargets: Targetable[];
   civilianStructures: CivilianStructure[];
+  /** Ground height lookup; when supplied, rounds and missiles are stopped by terrain. */
+  terrainHeightAt?: (x: number, z: number) => number;
   effects: EffectsSystem;
   audio: AudioManager;
 }
@@ -49,7 +51,7 @@ export class CombatSystem {
 
   update(dt: number, ctx: CombatContext): CombatEvent[] {
     const events: CombatEvent[] = [];
-    const { scene, player, hostileTargets, civilianStructures, effects, audio } = ctx;
+    const { scene, player, hostileTargets, civilianStructures, effects, audio, terrainHeightAt } = ctx;
 
     // --- Projectiles ---
     for (const p of this.projectiles) {
@@ -92,6 +94,11 @@ export class CombatSystem {
           p.alive = false;
         }
       }
+      // Checked after the target tests so a round that reaches a ground target still counts.
+      if (p.alive && terrainHeightAt && p.position.y < terrainHeightAt(p.position.x, p.position.z)) {
+        effects.smokePuff(p.position, 0.8);
+        p.alive = false;
+      }
     }
     this.projectiles = this.projectiles.filter((p) => {
       if (!p.alive) p.dispose(scene);
@@ -102,6 +109,9 @@ export class CombatSystem {
     for (const m of this.missiles) {
       if (!m.alive && !m.exploded) continue;
       if (m.alive) m.update(dt);
+      if (m.alive && terrainHeightAt && m.position.y < terrainHeightAt(m.position.x, m.position.z)) {
+        m.detonate(false);
+      }
       if (m.exploded) {
         effects.explosion(m.position, m.hitTarget ? 1.6 : 1.0);
         audio.explosion();

@@ -102,13 +102,18 @@ test.describe('Operation Broken Beacon smoke test', () => {
     expect(onDeck.speed).toBeLessThan(5);
 
     // Advance the throttle to trigger the cat shot.
+    // Wait on sim state, not wall-clock time: on a slow software-rendered runner the simulation
+    // advances slower than real time, so fixed sleeps are not enough.
     await page.keyboard.down('ShiftLeft');
-    await page.waitForTimeout(3500);
+    await expect
+      .poll(async () => (await readSceneState(page)).launchPhase, { timeout: 45000 })
+      .not.toBe('onDeck');
     await page.keyboard.up('ShiftLeft');
-    await page.waitForTimeout(2500);
+    await expect
+      .poll(async () => (await readSceneState(page)).launchPhase, { timeout: 45000 })
+      .toBe('airborne');
 
     const airborne = await readSceneState(page);
-    expect(airborne.launchPhase).toBe('airborne');
     expect(airborne.speed, 'catapult should impart flying speed').toBeGreaterThan(50);
     expect(airborne.missionStage).not.toBe('failed');
 

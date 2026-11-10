@@ -5,9 +5,14 @@ terrain surface, texture and sound is generated procedurally at runtime from Thr
 custom `BufferGeometry`, canvas-drawn textures and the Web Audio API.
 
 This guide exists for the optional case where you want to *replace* a procedural model with an
-authored one. The loader is already wired for it: drop a correctly named file into the right folder
-and it takes over that slot on the next load. If the file is missing or fails to load, the game logs
-a warning and uses the procedural fallback — the mission always starts.
+authored one.
+
+> **Current status — not yet rendered in-game.** The loader finds, validates, normalizes and (in dev
+> builds) reports on a correctly named file dropped into the right folder, but the live entities are
+> still built from the procedural models, because gameplay depends on their attachment points
+> (hardpoints, engine and damage points, catapult and arresting-wire positions). Dropping in a GLB
+> today gets you the diagnostics report, not a visual swap. Wiring a GLB's visuals onto the
+> procedural attachment rig is the remaining step. A missing or broken file never blocks the mission.
 
 ---
 
