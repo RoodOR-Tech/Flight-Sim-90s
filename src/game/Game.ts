@@ -838,10 +838,7 @@ export class Game {
 
     if (this.input.consumeJustPressed('dropBomb') && this.player.canDropBomb()) {
       this.player.consumeBomb();
-      const fm = this.player.controller.flightModel;
-      // Released from just under the fuselage with the aircraft's own velocity.
-      const origin = this.tmpVec.copy(fm.position).addScaledVector(fm.getUp(this.tmpForward), -1.4);
-      this.combat.dropBomb(this.scene, origin, fm.velocity);
+      this.combat.dropBomb(this.scene, this.bombReleasePoint(this.tmpVec), this.player.controller.flightModel.velocity);
       this.audio.menuConfirm();
     }
 
@@ -1247,6 +1244,12 @@ export class Game {
     return n > 0 ? this.armorCentroid.divideScalar(n) : null;
   }
 
+  /** Where a bomb leaves the aircraft: just under the fuselage. Used by the drop and the CCIP alike. */
+  private bombReleasePoint(out: THREE.Vector3): THREE.Vector3 {
+    const fm = this.player.controller.flightModel;
+    return out.copy(fm.position).addScaledVector(fm.getUp(this.tmpForward), -1.4);
+  }
+
   /**
    * CCIP: predicts where a bomb released this instant would land and projects that point through
    * the live camera. Returns null when no bombs are carried or the point is off-screen (which is
@@ -1254,8 +1257,11 @@ export class Game {
    */
   private computeBombPipper(): { x: number; y: number } | null {
     if (this.player.bombCount <= 0 || this.launchPhase !== 'airborne' || !this.player.isAlive()) return null;
+    // Same release point and timestep as the real drop, so the pipper matches the bomb even on a
+    // fast, very low release where a fraction of a second of fall is tens of metres of range.
     const fm = this.player.controller.flightModel;
-    if (!predictBombImpact(fm.position, fm.velocity, this.terrainHeightAt, this.tmpImpact, 1 / 20)) return null;
+    const origin = this.bombReleasePoint(this.tmpVec);
+    if (!predictBombImpact(origin, fm.velocity, this.terrainHeightAt, this.tmpImpact, FIXED_TIMESTEP)) return null;
     return this.projectToScreen(this.tmpImpact);
   }
 
