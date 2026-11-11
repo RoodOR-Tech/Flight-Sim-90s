@@ -11,6 +11,7 @@ export type ActionKey =
   | 'afterburner'
   | 'fireCannon'
   | 'fireMissile'
+  | 'dropBomb'
   | 'cycleTarget'
   | 'radarLock'
   | 'toggleGear'
@@ -39,6 +40,7 @@ const KEY_MAP: Record<string, ActionKey> = {
   KeyB: 'afterburner',
   Space: 'fireCannon',
   KeyR: 'fireMissile',
+  KeyX: 'dropBomb',
   KeyT: 'cycleTarget',
   KeyL: 'radarLock',
   KeyG: 'toggleGear',

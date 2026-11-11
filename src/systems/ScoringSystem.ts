@@ -7,6 +7,11 @@ export interface ScoreInput {
   completionTimeSeconds: number;
   landedSuccessfully: boolean;
   civilianStrikes: number;
+  /**
+   * Strike missions: fraction (0..1) of the primary ground targets destroyed. When set it replaces
+   * the fighters-and-radar terms and is worth the same maximum, so grades are comparable.
+   */
+  primaryTargetFraction?: number;
 }
 
 export interface ScoreResult {
@@ -28,8 +33,11 @@ const TIME_PAR_SECONDS = 600;
 
 /** Pure scoring function so it can be unit tested without any game/engine state. */
 export function calculateScore(input: ScoreInput): ScoreResult {
-  const enemies = Math.max(0, Math.min(2, input.enemiesDestroyed)) * 1000;
-  const radar = input.radarDestroyed ? 800 : 0;
+  const strike = input.primaryTargetFraction !== undefined;
+  const enemies = strike ? 0 : Math.max(0, Math.min(2, input.enemiesDestroyed)) * 1000;
+  const radar = strike
+    ? Math.round(Math.max(0, Math.min(1, input.primaryTargetFraction!)) * 2800)
+    : input.radarDestroyed ? 800 : 0;
   const accuracy = Math.max(0, Math.min(1, input.cannonAccuracy)) * 500;
   const missiles = Math.max(0, Math.min(4, input.missilesRemaining)) * 100;
   const health = Math.max(0, Math.min(1, input.playerHealthFraction)) * 400;

@@ -27,6 +27,9 @@ const COLOR_GRASS = new THREE.Color(0x51603c);
 const COLOR_GRASS_DRY = new THREE.Color(0x6d7043);
 const COLOR_ROCK = new THREE.Color(0x6f6858);
 const COLOR_ROCK_HIGH = new THREE.Color(0x8a8578);
+// Dry open steppe for the mainland interior: much paler than the island's scrub, so vehicles and
+// their shadows read clearly against it from attack altitude.
+const COLOR_STEPPE = new THREE.Color(0xd9c992);
 
 /**
  * The island area: one main landmass plus smaller outlying islands, generated from the
@@ -70,6 +73,18 @@ export class Terrain {
       [3900, -4100, 110, 44, 83],
       [1500, 900, 85, 28, 97],
     ];
+    // The western mainland (mission 2): a much larger, gentler landmass of rolling hills.
+    const mainland: IslandDefinition = {
+      cx: WORLD_LAYOUT.mainland.x,
+      cz: WORLD_LAYOUT.mainland.z,
+      radius: WORLD_LAYOUT.mainland.radius,
+      amplitude: 96,
+      seed: 113,
+      ridgeFrequency: 3.1,
+      ridgeWeight: 0.2,
+    };
+    islands.push(mainland);
+
     for (const [x, z, radius, amplitude, seed] of isletSpecs) {
       islands.push({ cx: x, cz: z, radius, amplitude, seed, ridgeFrequency: 5.6, ridgeWeight: 0.68 });
     }
@@ -82,6 +97,14 @@ export class Terrain {
         radius: 58,
         height: RADAR_PLATEAU_HEIGHT,
         falloff: 95,
+      },
+      // Level inland ground for the armoured column to drive across.
+      {
+        cx: WORLD_LAYOUT.armorPlateau.x,
+        cz: WORLD_LAYOUT.armorPlateau.z,
+        radius: WORLD_LAYOUT.armorPlateau.radius,
+        height: WORLD_LAYOUT.armorPlateau.height,
+        falloff: 260,
       },
     ];
 
@@ -107,8 +130,10 @@ export class Terrain {
 
     for (const island of islands) {
       const isMain = island.radius === MAIN_ISLAND.radius;
-      const segments = isMain ? settings.terrainSegments : Math.max(32, Math.floor(settings.terrainSegments * 0.35));
-      const mesh = this.buildIslandMesh(island, segments);
+      // The mainland is big enough to fly low over, so it gets full mesh density like the main island.
+      const detailed = isMain || island === mainland;
+      const segments = detailed ? settings.terrainSegments : Math.max(32, Math.floor(settings.terrainSegments * 0.35));
+      const mesh = this.buildIslandMesh(island, segments, island === mainland ? COLOR_STEPPE : null);
       mesh.receiveShadow = settings.shadowsEnabled && isMain;
       this.meshes.push(mesh);
       scene.add(mesh);
@@ -121,7 +146,7 @@ export class Terrain {
    * Builds one island as a displaced grid. The grid extends slightly past the island radius so
    * the shoreline closes below sea level and no gap shows between land and water.
    */
-  private buildIslandMesh(island: IslandDefinition, segments: number): THREE.Mesh {
+  private buildIslandMesh(island: IslandDefinition, segments: number, tint: THREE.Color | null = null): THREE.Mesh {
     const extent = island.radius * 1.18;
     const size = extent * 2;
     const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
@@ -144,6 +169,8 @@ export class Terrain {
 
       const slope = this.field.slopeAt(worldX, worldZ, 3);
       this.biomeColor(h, slope, color);
+      // Above the beach, pull the biome colour most of the way toward the tint (if any).
+      if (tint && h > 3.5) color.lerp(tint, 0.72);
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;

@@ -7,6 +7,9 @@ import { WorldBuilder, WORLD_LAYOUT } from '../world/WorldBuilder';
 import { PlayerAircraft } from '../entities/PlayerAircraft';
 import { EnemyAircraft } from '../entities/EnemyAircraft';
 import { GroundTarget } from '../entities/GroundTarget';
+import { GroundUnit } from '../entities/GroundUnit';
+import { predictBombImpact } from '../entities/Bomb';
+import { MISSIONS, MissionId } from './Missions';
 import { PlayerInputAdapter } from '../flight/AircraftController';
 import { FlightControls } from '../flight/FlightModel';
 import { evaluateLanding } from '../flight/LandingEvaluator';
@@ -63,6 +66,9 @@ export class Game {
   private player!: PlayerAircraft;
   private enemies: EnemyAircraft[] = [];
   private groundTarget!: GroundTarget;
+  /** Mission 2 vehicles: tanks (the objective) and flak carriers (optional, hostile). */
+  private groundUnits: GroundUnit[] = [];
+  private missionId: MissionId = 'broken_beacon';
 
   private hud: HUD;
   private tacticalMap: TacticalMap;
@@ -99,6 +105,8 @@ export class Game {
   private tmpShake = new THREE.Vector3();
   private tmpForward = new THREE.Vector3();
   private tmpVec = new THREE.Vector3();
+  private tmpImpact = new THREE.Vector3();
+  private armorCentroid = new THREE.Vector3();
   private rigInput: CameraRigInput;
 
   constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
@@ -190,10 +198,23 @@ export class Game {
           enemy.applyDamage(9999);
           enemy.setVisible(false);
         }
+        for (const unit of this.groundUnits) unit.applyDamage(9999);
         this.groundTarget.active = true;
         this.groundTarget.applyDamage(9999);
         this.mission.devJumpToRecovery();
         return this.mission.stage;
+      };
+      // Development-only: place the aircraft for an automated attack-run check (position, heading
+      // and dive angle in degrees, speed in m/s). Stripped from production builds.
+      (window as unknown as Record<string, unknown>).__obbDevPlace = (
+        x: number, y: number, z: number, headingDeg: number, pitchDeg: number, speed: number,
+      ) => {
+        const fm = this.player.controller.flightModel;
+        const euler = new THREE.Euler(THREE.MathUtils.degToRad(pitchDeg), -THREE.MathUtils.degToRad(headingDeg), 0, 'YXZ');
+        fm.quaternion.setFromEuler(euler);
+        fm.position.set(x, y, z);
+        fm.velocity.copy(fm.getForward()).multiplyScalar(speed);
+        this.cameraRig.snap();
       };
     }
 
@@ -202,6 +223,7 @@ export class Game {
       return {
         screen: this.state.screen,
         paused: this.state.paused,
+        missionId: this.missionId,
         missionStage: this.mission.stage,
         launchPhase: this.launchPhase,
         cameraMode: this.cameraMode,
@@ -217,6 +239,14 @@ export class Game {
         maxHealth: this.player?.controller.maxHealth ?? 0,
         missiles: this.player?.missileCount ?? 0,
         cannonAmmo: this.player?.cannonAmmo ?? 0,
+        bombs: this.player?.bombCount ?? 0,
+        bombsInFlight: this.combat.bombs.length,
+        groundUnits: this.groundUnits.map((u) => ({
+          id: u.id,
+          kind: u.unitKind,
+          alive: u.isAlive(),
+          position: u.getPosition().toArray(),
+        })),
         radarDestroyed: this.groundTarget?.destroyed ?? false,
         landingResult: this.landingResult,
         graphicsQuality: this.effectiveGraphicsLabel(),
@@ -406,13 +436,14 @@ export class Game {
   private startMission(result: BriefingResult) {
     this.state.settings.difficulty = result.difficulty;
     this.state.skipCarrierLaunch = result.skipLaunch;
+    this.missionId = result.missionId;
     this.applySettings(this.state.settings);
     this.audio.resume();
     this.audio.startEngine();
     this.setupEntities();
     this.player.damageMultiplier = DIFFICULTY_TABLE[result.difficulty].playerDamageMultiplier;
     this.stopSpeech();
-    this.mission.reset();
+    this.mission.reset(this.missionId);
     this.combat.reset(this.scene);
     this.effects.reset();
     this.world.resetForMission();
@@ -447,7 +478,11 @@ export class Game {
   }
 
   private restartMission() {
-    this.startMission({ difficulty: this.state.settings.difficulty, skipLaunch: this.state.skipCarrierLaunch });
+    this.startMission({
+      difficulty: this.state.settings.difficulty,
+      skipLaunch: this.state.skipCarrierLaunch,
+      missionId: this.missionId,
+    });
   }
 
   /**
@@ -458,11 +493,11 @@ export class Game {
     for (const e of this.enemies) e.dispose(this.scene);
     this.enemies = [];
 
-    if (!this.player) {
-      this.player = new PlayerAircraft(this.scene, this.graphics);
-    } else {
-      this.player.resetForMission();
-    }
+    for (const u of this.groundUnits) u.dispose(this.scene);
+    this.groundUnits = [];
+
+    if (!this.player) this.player = new PlayerAircraft(this.scene, this.graphics);
+    this.player.resetForMission(MISSIONS[this.missionId].loadout);
 
     if (!this.groundTarget) {
       // Seat the installation on the terrain the generator actually produced, so it never floats
@@ -472,6 +507,66 @@ export class Game {
       this.groundTarget = new GroundTarget(this.scene, radarPos, this.graphics);
     } else {
       this.groundTarget.resetForMission();
+    }
+
+    if (this.missionId === 'iron_anvil') this.spawnArmorColumn();
+  }
+
+  /** Six tanks in line astern along the plateau route, plus two stationary flak carriers. */
+  private spawnArmorColumn() {
+    const diff = DIFFICULTY_TABLE[this.state.settings.difficulty];
+    const start = WORLD_LAYOUT.armorRouteStart;
+    const end = WORLD_LAYOUT.armorRouteEnd;
+    const dir = end.clone().sub(start).setY(0).normalize();
+    const tanks = 6;
+    const spacing = 44;
+    for (let i = 0; i < tanks; i++) {
+      // i = 0 is the lead tank: it starts furthest along and drives all the way to the end.
+      this.groundUnits.push(
+        new GroundUnit(
+          this.scene,
+          {
+            kind: 'tank',
+            id: `tank-${i + 1}`,
+            start: start.clone().addScaledVector(dir, (tanks - 1 - i) * spacing),
+            destination: end,
+            haltShort: i * spacing,
+          },
+          this.terrainHeightAt,
+          diff,
+          this.graphics,
+        ),
+      );
+    }
+    WORLD_LAYOUT.flakPositions.forEach((pos, i) => {
+      this.groundUnits.push(
+        new GroundUnit(this.scene, { kind: 'flak', id: `flak-${i + 1}`, start: pos }, this.terrainHeightAt, diff, this.graphics),
+      );
+    });
+  }
+
+  private armorRemaining(): number {
+    let n = 0;
+    for (const u of this.groundUnits) if (u.unitKind === 'tank' && u.isAlive()) n += 1;
+    return n;
+  }
+
+  /** Everything the player can currently lock, shoot or bomb. */
+  private liveTargets(): Targetable[] {
+    const targets: Targetable[] = this.enemies.filter((e) => e.isAlive());
+    if (this.groundTarget.active && this.groundTarget.isAlive()) targets.push(this.groundTarget);
+    for (const u of this.groundUnits) if (u.isAlive()) targets.push(u);
+    return targets;
+  }
+
+  private updateGroundUnits(dt: number) {
+    const fm = this.player.controller.flightModel;
+    for (const unit of this.groundUnits) {
+      unit.update(dt, fm.position, fm.velocity, this.player.isAlive());
+      if (unit.fireRequested) {
+        this.combat.fireCannon(this.scene, unit.fireOrigin, unit.fireDirection, 'enemy');
+        this.effects.muzzleFlash(unit.fireOrigin);
+      }
     }
   }
 
@@ -618,6 +713,7 @@ export class Game {
     if (this.launchPhase === 'airborne') {
       this.handleWeaponsInput(dt);
       this.updateEnemies(dt);
+      this.updateGroundUnits(dt);
       this.updateCombat(dt);
       this.updateCrashChecks(dt);
       this.updateLandingLogic(dt);
@@ -634,6 +730,7 @@ export class Game {
       radarDestroyed: this.groundTarget.destroyed,
       landedSuccessfully: this.landingResult === 'success',
       civilianStrikes: this.player.civilianStrikes,
+      armorRemaining: this.armorRemaining(),
     });
 
     if (this.mission.stage === 'strike_radar' && !this.groundTarget.active) {
@@ -698,6 +795,10 @@ export class Game {
       }
     }
 
+    for (const unit of this.groundUnits) {
+      if (unit.consumeSmokeTick()) this.effects.damageSmoke(unit.getSmokeWorldPosition(this.tmpVec), 0.8);
+    }
+
     if (this.groundTarget.consumeSmokeTick()) {
       const points = this.groundTarget.getDamageWorldPositions();
       const point = points[this.frameCount % points.length];
@@ -714,8 +815,7 @@ export class Game {
   }
 
   private handleWeaponsInput(_dt: number) {
-    const targets: Targetable[] = [...this.enemies.filter((e) => e.isAlive())];
-    if (this.groundTarget.active && this.groundTarget.isAlive()) targets.push(this.groundTarget);
+    const targets = this.liveTargets();
 
     if (this.input.consumeJustPressed('cycleTarget')) {
       this.radar.cycleTarget(this.player, targets);
@@ -734,6 +834,12 @@ export class Game {
       this.combat.fireCannon(this.scene, origin, dir, 'player');
       this.effects.muzzleFlash(origin);
       this.audio.cannonFire();
+    }
+
+    if (this.input.consumeJustPressed('dropBomb') && this.player.canDropBomb()) {
+      this.player.consumeBomb();
+      this.combat.dropBomb(this.scene, this.bombReleasePoint(this.tmpVec), this.player.controller.flightModel.velocity);
+      this.audio.menuConfirm();
     }
 
     if (this.input.consumeJustPressed('fireMissile') && this.player.canFireMissile() && this.player.locked) {
@@ -768,8 +874,7 @@ export class Game {
   }
 
   private updateCombat(dt: number) {
-    const hostileTargets: Targetable[] = [...this.enemies.filter((e) => e.isAlive())];
-    if (this.groundTarget.active && this.groundTarget.isAlive()) hostileTargets.push(this.groundTarget);
+    const hostileTargets = this.liveTargets();
     const events = this.combat.update(dt, {
       scene: this.scene,
       player: this.player,
@@ -792,6 +897,17 @@ export class Game {
           if (enemy) {
             this.effects.explosion(enemy.getPosition(), 1.7);
             enemy.setVisible(false);
+          }
+          const unit = this.groundUnits.find((u) => u.id === ev.targetId);
+          if (unit) {
+            this.effects.explosion(unit.getPosition(), 1.9);
+            this.audio.explosion();
+            const left = this.armorRemaining();
+            if (unit.unitKind === 'tank' && left > 0) {
+              this.mission.radioMessage('Airborne Control', `Good kill. ${left} tank${left === 1 ? '' : 's'} remaining.`);
+            } else if (unit.unitKind === 'flak') {
+              this.mission.radioMessage('Airborne Control', 'Flak vehicle destroyed.');
+            }
           }
         }
       }
@@ -1013,8 +1129,10 @@ export class Game {
     const altitudeFeet = fm.position.y * METERS_TO_FEET;
     const warnings: string[] = [];
     if (fm.stalling && fm.getSpeed() > 5) warnings.push('STALL');
-    if (fm.position.y < 250 && fm.velocity.y < -12) warnings.push('PULL UP');
-    if (fm.position.y < 120) warnings.push('LOW ALTITUDE');
+    // Height above the surface, so the warnings also work over the mainland's hills.
+    const agl = fm.position.y - this.world.getSurfaceHeightAt(fm.position.x, fm.position.z);
+    if (agl < 250 && fm.velocity.y < -12) warnings.push('PULL UP');
+    if (agl < 120) warnings.push('LOW ALTITUDE');
     if (this.combat.missiles.some((m) => m.owner === 'enemy' && m.target?.id === 'player' && m.alive)) warnings.push('MISSILE');
     if (this.player.locked) warnings.push('RADAR LOCK');
     if (this.mission.stage === 'landing' && !fm.gearDown) warnings.push('GEAR');
@@ -1022,14 +1140,17 @@ export class Game {
     if (this.mission.boundaryWarningActive && this.mission.stage !== 'rtb') warnings.push('BOUNDARY');
     if (!this.player.isAlive()) warnings.push('MISSION FAILED');
 
-    const targets: Targetable[] = [...this.enemies.filter((e) => e.isAlive())];
-    if (this.groundTarget.active && this.groundTarget.isAlive()) targets.push(this.groundTarget);
+    const targets = this.liveTargets();
     const currentTarget = targets.find((t) => t.id === this.player.currentTargetId) ?? null;
 
     const waypoint = this.mission.currentWaypoint();
     const carrier = this.world.carrier;
-    const waypointForHud = this.mission.stage === 'rtb' || this.mission.stage === 'landing' ? carrier.getPosition() : waypoint;
+    const waypointForHud =
+      this.mission.stage === 'rtb' || this.mission.stage === 'landing' ? carrier.getPosition() :
+      this.mission.stage === 'strike_armor' ? this.computeArmorCentroid() : waypoint;
     const waypointLabel =
+      this.mission.stage === 'to_alpha' && this.missionId === 'iron_anvil' ? 'WAYPOINT COAST' :
+      this.mission.stage === 'strike_armor' ? 'ARMOUR COLUMN' :
       this.mission.stage === 'to_alpha' ? 'WAYPOINT ALPHA' :
       this.mission.stage === 'to_bravo' ? 'WAYPOINT BRAVO' :
       this.mission.stage === 'strike_radar' ? 'RADAR SITE' :
@@ -1046,6 +1167,10 @@ export class Game {
       if (!e.isAlive()) continue;
       const rel = toRel(e.getPosition());
       radarContacts.push({ kind: 'enemy', ...rel, selected: e.id === this.player.currentTargetId });
+    }
+    for (const u of this.groundUnits) {
+      if (!u.isAlive()) continue;
+      radarContacts.push({ kind: 'ground', ...toRel(u.getPosition()), selected: u.id === this.player.currentTargetId });
     }
     if (this.groundTarget.active && this.groundTarget.isAlive()) {
       const rel = toRel(this.groundTarget.getPosition());
@@ -1078,6 +1203,10 @@ export class Game {
       healthFraction: this.player.controller.healthFraction(),
       cannonAmmo: this.player.cannonAmmo,
       missilesRemaining: this.player.missileCount,
+      missileLabel: MISSIONS[this.missionId].loadout.missileLabel,
+      bombsRemaining: MISSIONS[this.missionId].loadout.bombs > 0 ? this.player.bombCount : null,
+      bombPipper: this.computeBombPipper(),
+      targetMarker: currentTarget ? this.projectToScreen(this.tmpImpact.copy(currentTarget.getPosition())) : null,
       selectedWeapon: this.player.locked ? 'missile' : 'cannon',
       gearDown: fm.gearDown,
       flapsDown: fm.flapsDown,
@@ -1103,6 +1232,47 @@ export class Game {
     };
   }
 
+  /** Centre of the surviving tanks, used as the strike waypoint. Null once none are left. */
+  private computeArmorCentroid(): THREE.Vector3 | null {
+    let n = 0;
+    this.armorCentroid.set(0, 0, 0);
+    for (const u of this.groundUnits) {
+      if (u.unitKind !== 'tank' || !u.isAlive()) continue;
+      this.armorCentroid.add(u.getPosition());
+      n += 1;
+    }
+    return n > 0 ? this.armorCentroid.divideScalar(n) : null;
+  }
+
+  /** Where a bomb leaves the aircraft: just under the fuselage. Used by the drop and the CCIP alike. */
+  private bombReleasePoint(out: THREE.Vector3): THREE.Vector3 {
+    const fm = this.player.controller.flightModel;
+    return out.copy(fm.position).addScaledVector(fm.getUp(this.tmpForward), -1.4);
+  }
+
+  /**
+   * CCIP: predicts where a bomb released this instant would land and projects that point through
+   * the live camera. Returns null when no bombs are carried or the point is off-screen (which is
+   * normal in level flight — the pipper comes into view as the nose drops toward the target).
+   */
+  private computeBombPipper(): { x: number; y: number } | null {
+    if (this.player.bombCount <= 0 || this.launchPhase !== 'airborne' || !this.player.isAlive()) return null;
+    // Same release point and timestep as the real drop, so the pipper matches the bomb even on a
+    // fast, very low release where a fraction of a second of fall is tens of metres of range.
+    const fm = this.player.controller.flightModel;
+    const origin = this.bombReleasePoint(this.tmpVec);
+    if (!predictBombImpact(origin, fm.velocity, this.terrainHeightAt, this.tmpImpact, FIXED_TIMESTEP)) return null;
+    return this.projectToScreen(this.tmpImpact);
+  }
+
+  /** Projects a world point (modified in place) through the live camera to 0..1 screen fractions. */
+  private projectToScreen(point: THREE.Vector3): { x: number; y: number } | null {
+    point.project(this.camera);
+    if (point.z < -1 || point.z > 1) return null;
+    if (Math.abs(point.x) > 0.96 || Math.abs(point.y) > 0.96) return null;
+    return { x: (point.x + 1) / 2, y: (1 - point.y) / 2 };
+  }
+
   private computeMapContacts(): MapContact[] {
     const contacts: MapContact[] = [];
     const fm = this.player.controller.flightModel;
@@ -1113,12 +1283,20 @@ export class Game {
       if (!e.isAlive()) continue;
       contacts.push({ kind: 'enemy', x: e.getPosition().x, z: e.getPosition().z, label: 'KESTREL-9' });
     }
-    if (this.groundTarget.isAlive()) {
+    if (this.missionId === 'broken_beacon' && this.groundTarget.isAlive()) {
       contacts.push({ kind: 'ground', x: this.groundTarget.getPosition().x, z: this.groundTarget.getPosition().z, label: 'RADAR' });
+    }
+    for (const u of this.groundUnits) {
+      if (!u.isAlive()) continue;
+      // Label only the lead tank and the flak so the column does not become a smear of text.
+      const label = u.unitKind === 'flak' ? 'FLAK' : u.id === 'tank-1' ? 'ARMOUR' : undefined;
+      contacts.push({ kind: 'ground', x: u.getPosition().x, z: u.getPosition().z, label });
     }
     const wp = this.mission.currentWaypoint();
     if (wp) {
-      const label = this.mission.stage === 'to_alpha' ? 'ALPHA' : this.mission.stage === 'to_bravo' ? 'BRAVO' : 'TARGET';
+      const label =
+        this.missionId === 'iron_anvil' ? 'COAST' :
+        this.mission.stage === 'to_alpha' ? 'ALPHA' : this.mission.stage === 'to_bravo' ? 'BRAVO' : 'TARGET';
       contacts.push({ kind: 'waypoint', x: wp.x, z: wp.z, label });
     }
     contacts.push({
@@ -1126,6 +1304,12 @@ export class Game {
       x: this.world.terrain.mainIslandCenter.x,
       z: this.world.terrain.mainIslandCenter.z,
       radius: this.world.terrain.mainIslandRadius,
+    });
+    contacts.push({
+      kind: 'island',
+      x: WORLD_LAYOUT.mainland.x,
+      z: WORLD_LAYOUT.mainland.z,
+      radius: WORLD_LAYOUT.mainland.radius,
     });
     return contacts;
   }
@@ -1191,7 +1375,14 @@ export class Game {
     this.stopSpeech();
     // Count actual kills: before the intercept stage no fighters exist, so none were destroyed.
     const enemiesDestroyed = this.enemies.filter((e) => !e.isAlive()).length;
+    const strike = this.missionId === 'iron_anvil';
+    const tanksTotal = this.groundUnits.filter((u) => u.unitKind === 'tank').length;
+    const tanksDestroyed = tanksTotal - this.armorRemaining();
+    const flakDestroyed = this.groundUnits.filter((u) => u.unitKind === 'flak' && !u.isAlive()).length;
+    const launched = this.launchPhase === 'airborne';
+    const landed = this.landingResult === 'success';
     const score = calculateScore({
+      primaryTargetFraction: strike && tanksTotal > 0 ? tanksDestroyed / tanksTotal : undefined,
       enemiesDestroyed,
       radarDestroyed: this.groundTarget.destroyed,
       cannonAccuracy: this.combat.getAccuracy(),
@@ -1210,12 +1401,21 @@ export class Game {
       success,
       failReason,
       score,
-      objectives: [
-        { label: 'Launch from CVN Resolute', complete: this.launchPhase === 'airborne' },
-        { label: 'Destroy two Kestrel-9 fighters', complete: enemiesDestroyed >= 2 },
-        { label: 'Destroy coastal radar site', complete: this.groundTarget.destroyed },
-        { label: 'Return and land on CVN Resolute', complete: this.landingResult === 'success' },
-      ],
+      objectives: strike
+        ? [
+            { label: 'Launch from CVN Resolute', complete: launched },
+            { label: `Destroy the armoured column (${tanksDestroyed}/${tanksTotal} tanks)`, complete: tanksDestroyed >= tanksTotal },
+            { label: `Optional: flak vehicles destroyed (${flakDestroyed}/2)`, complete: flakDestroyed >= 2 },
+            { label: 'Return and land on CVN Resolute', complete: landed },
+          ]
+        : [
+            { label: 'Launch from CVN Resolute', complete: launched },
+            { label: 'Destroy two Kestrel-9 fighters', complete: enemiesDestroyed >= 2 },
+            { label: 'Destroy coastal radar site', complete: this.groundTarget.destroyed },
+            { label: 'Return and land on CVN Resolute', complete: landed },
+          ],
+      missionName: MISSIONS[this.missionId].name,
+      strike,
       accuracy: this.combat.getAccuracy(),
       completionTimeSeconds: this.mission.elapsedTime,
       landedSuccessfully: this.landingResult === 'success',

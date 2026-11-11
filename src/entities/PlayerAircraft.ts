@@ -12,6 +12,7 @@ const MAX_MISSILES = 4;
 const MAX_CANNON_AMMO = 240;
 const CANNON_COOLDOWN = 0.09;
 const MISSILE_COOLDOWN = 1.4;
+const BOMB_COOLDOWN = 0.45;
 
 /**
  * The player's aircraft.
@@ -38,6 +39,8 @@ export class PlayerAircraft implements Targetable {
 
   cannonAmmo = MAX_CANNON_AMMO;
   missileCount = MAX_MISSILES;
+  bombCount = 0;
+  bombCooldownTimer = 0;
   selectedWeapon: WeaponType = 'cannon';
   cannonCooldownTimer = 0;
   missileCooldownTimer = 0;
@@ -120,6 +123,15 @@ export class PlayerAircraft implements Targetable {
     this.refreshMissileVisuals();
   }
 
+  canDropBomb(): boolean {
+    return this.bombCount > 0 && this.bombCooldownTimer <= 0 && this.controller.alive;
+  }
+
+  consumeBomb() {
+    this.bombCount = Math.max(0, this.bombCount - 1);
+    this.bombCooldownTimer = BOMB_COOLDOWN;
+  }
+
   private refreshMissileVisuals() {
     // Hide pylon rounds from the outboard stations inward as they are fired.
     for (let i = 0; i < this.missileVisuals.length; i++) {
@@ -132,9 +144,11 @@ export class PlayerAircraft implements Targetable {
   }
 
   /** Resets all per-mission state, reusing the existing scene objects. */
-  resetForMission() {
+  resetForMission(loadout: { missiles: number; bombs: number } = { missiles: MAX_MISSILES, bombs: 0 }) {
     this.cannonAmmo = MAX_CANNON_AMMO;
-    this.missileCount = MAX_MISSILES;
+    this.missileCount = Math.min(MAX_MISSILES, loadout.missiles);
+    this.bombCount = loadout.bombs;
+    this.bombCooldownTimer = 0;
     this.selectedWeapon = 'cannon';
     this.cannonCooldownTimer = 0;
     this.missileCooldownTimer = 0;
@@ -152,6 +166,7 @@ export class PlayerAircraft implements Targetable {
   update(dt: number) {
     if (this.cannonCooldownTimer > 0) this.cannonCooldownTimer -= dt;
     if (this.missileCooldownTimer > 0) this.missileCooldownTimer -= dt;
+    if (this.bombCooldownTimer > 0) this.bombCooldownTimer -= dt;
 
     const fm = this.controller.flightModel;
 
