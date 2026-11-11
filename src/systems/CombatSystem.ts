@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Projectile, ProjectileOwner, segmentHitsSphere } from '../entities/Projectile';
 import { Missile, MissileOwner } from '../entities/Missile';
+import { Bomb, BOMB_BLAST_RADIUS, BOMB_DAMAGE } from '../entities/Bomb';
 import { Targetable } from '../game/Types';
 import { PlayerAircraft } from '../entities/PlayerAircraft';
 import { EffectsSystem } from './EffectsSystem';
@@ -27,9 +28,12 @@ export interface CombatContext {
   audio: AudioManager;
 }
 
+const blastDir = new THREE.Vector3();
+
 export class CombatSystem {
   projectiles: Projectile[] = [];
   missiles: Missile[] = [];
+  bombs: Bomb[] = [];
   private shotsFiredByPlayer = 0;
   private shotsHitByPlayer = 0;
 
@@ -47,6 +51,10 @@ export class CombatSystem {
     const missile = new Missile(scene, origin, dir, target, owner);
     missile.onSmoke = (pos) => effects.smokePuff(pos, 1.4);
     this.missiles.push(missile);
+  }
+
+  dropBomb(scene: THREE.Scene, origin: THREE.Vector3, velocity: THREE.Vector3) {
+    this.bombs.push(new Bomb(scene, origin, velocity));
   }
 
   update(dt: number, ctx: CombatContext): CombatEvent[] {
@@ -133,12 +141,44 @@ export class CombatSystem {
     }
     this.missiles = this.missiles.filter((m) => !m.exploded);
 
+    // --- Bombs ---
+    const heightAt = terrainHeightAt ?? (() => 0);
+    for (const b of this.bombs) {
+      if (!b.update(dt, heightAt)) continue;
+      const impact = b.position;
+      effects.explosion(impact, 2.6);
+      if (impact.y <= 0.2) effects.waterSplash(impact, 2.4);
+      else effects.groundImpact(impact);
+      effects.addShake(0.5);
+      audio.explosion();
+      // Blast damage falls off linearly to nothing at the edge of the radius.
+      for (const t of hostileTargets) {
+        if (!t.isAlive()) continue;
+        const reach = BOMB_BLAST_RADIUS + t.getCollisionRadius();
+        const dist = t.getPosition().distanceTo(impact);
+        if (dist >= reach) continue;
+        t.applyDamage(BOMB_DAMAGE * (1 - dist / reach), blastDir.copy(t.getPosition()).sub(impact).normalize());
+        if (!t.isAlive()) events.push({ type: 'target-destroyed', targetId: t.id });
+      }
+      for (const c of civilianStructures) {
+        if (c.position.distanceTo(impact) < BOMB_BLAST_RADIUS * 0.6 + c.radius) {
+          events.push({ type: 'civilian-hit' });
+        }
+      }
+    }
+    this.bombs = this.bombs.filter((b) => {
+      if (!b.alive) b.dispose(scene);
+      return b.alive;
+    });
+
     return events;
   }
 
   reset(scene: THREE.Scene) {
     for (const p of this.projectiles) p.dispose(scene);
     for (const m of this.missiles) m.dispose(scene);
+    for (const b of this.bombs) b.dispose(scene);
+    this.bombs = [];
     this.projectiles = [];
     this.missiles = [];
     this.shotsFiredByPlayer = 0;

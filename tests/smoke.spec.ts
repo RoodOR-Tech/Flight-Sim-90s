@@ -120,6 +120,41 @@ test.describe('Operation Broken Beacon smoke test', () => {
     expect(pageErrors, `Uncaught page errors: ${pageErrors.join('; ')}`).toEqual([]);
   });
 
+  test('mission 2 loads the armoured column and bombs can be released', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    await page.goto('/');
+    await expect(page.locator('#title-start-btn')).toBeVisible({ timeout: 20000 });
+    await page.click('#title-start-btn');
+    await page.click('[data-mission="iron_anvil"]');
+    await expect(page.locator('#briefing-title')).toHaveText('OPERATION IRON ANVIL');
+    await page.check('#skip-launch-checkbox');
+    await page.click('#briefing-start-btn');
+    await expect(page.locator('.hud-canvas')).toBeVisible({ timeout: 10000 });
+
+    await expect.poll(async () => (await readSceneState(page)).missionStage, { timeout: 20000 }).toBe('to_alpha');
+    const state = await readSceneState(page);
+    expect(state.missionId).toBe('iron_anvil');
+    expect(state.groundUnits.filter((u: any) => u.kind === 'tank' && u.alive)).toHaveLength(6);
+    expect(state.groundUnits.filter((u: any) => u.kind === 'flak' && u.alive)).toHaveLength(2);
+    // Vehicles sit on land, not at sea level.
+    for (const u of state.groundUnits) expect(u.position[1]).toBeGreaterThan(10);
+    expect(state.bombs).toBe(6);
+    expect(state.enemyCount).toBe(0);
+
+    await page.keyboard.press('KeyX');
+    await expect.poll(async () => (await readSceneState(page)).bombs, { timeout: 15000 }).toBe(5);
+
+    // Restart keeps the same mission and restores the loadout.
+    await page.keyboard.press('KeyP');
+    await page.click('#pause-restart-btn');
+    await expect.poll(async () => (await readSceneState(page)).bombs, { timeout: 15000 }).toBe(6);
+    expect((await readSceneState(page)).missionId).toBe('iron_anvil');
+
+    expect(pageErrors, `Uncaught page errors: ${pageErrors.join('; ')}`).toEqual([]);
+  });
+
   test('settings panel exposes the graphics quality control', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#title-start-btn')).toBeVisible({ timeout: 20000 });

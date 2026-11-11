@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WORLD_BOUNDARY_RADIUS, WORLD_BOUNDARY_WARN, WORLD_BOUNDARY_KILL_TIME } from './Constants';
 import { WORLD_LAYOUT } from '../world/WorldBuilder';
+import { MissionId } from './Missions';
 
 export type MissionStage =
   | 'launch'
@@ -8,6 +9,7 @@ export type MissionStage =
   | 'intercept'
   | 'to_bravo'
   | 'strike_radar'
+  | 'strike_armor'
   | 'rtb'
   | 'landing'
   | 'success'
@@ -26,6 +28,8 @@ export interface MissionUpdateInput {
   radarDestroyed: boolean;
   landedSuccessfully: boolean;
   civilianStrikes: number;
+  /** Strike mission: primary ground targets (tanks) still alive. */
+  armorRemaining?: number;
 }
 
 const WAYPOINT_ARRIVAL_RADIUS = 350;
@@ -34,6 +38,7 @@ const CIVILIAN_STRIKE_LIMIT = 3;
 let messageCounter = 0;
 
 export class MissionManager {
+  missionId: MissionId = 'broken_beacon';
   stage: MissionStage = 'launch';
   failReason = '';
   elapsedTime = 0;
@@ -44,7 +49,8 @@ export class MissionManager {
   boundaryWarningActive = false;
   private civilianWarned = false;
 
-  reset() {
+  reset(missionId: MissionId = 'broken_beacon') {
+    this.missionId = missionId;
     this.stage = 'launch';
     this.failReason = '';
     this.elapsedTime = 0;
@@ -73,7 +79,12 @@ export class MissionManager {
 
   beginFlight() {
     this.setStage('to_alpha');
-    this.queueMessage('Resolute Control', 'Viper One, you are clear of the deck. Proceed to waypoint Alpha.');
+    this.queueMessage(
+      'Resolute Control',
+      this.missionId === 'iron_anvil'
+        ? 'Viper One, you are clear of the deck. Steer west and cross the coast at waypoint Coast.'
+        : 'Viper One, you are clear of the deck. Proceed to waypoint Alpha.',
+    );
   }
 
   objectiveText(): string {
@@ -81,7 +92,9 @@ export class MissionManager {
       case 'launch':
         return 'Launch from CVN Resolute';
       case 'to_alpha':
-        return 'Navigate to waypoint ALPHA';
+        return this.missionId === 'iron_anvil' ? 'Cross the coast at waypoint COAST' : 'Navigate to waypoint ALPHA';
+      case 'strike_armor':
+        return 'Destroy the armoured column';
       case 'intercept':
         return 'Destroy hostile fighters';
       case 'to_bravo':
@@ -102,6 +115,10 @@ export class MissionManager {
   }
 
   currentWaypoint(): THREE.Vector3 | null {
+    if (this.missionId === 'iron_anvil') {
+      if (this.stage === 'to_alpha') return WORLD_LAYOUT.waypointCoast;
+      return null; // the column moves, so Game supplies its live position during the strike
+    }
     if (this.stage === 'to_alpha') return WORLD_LAYOUT.waypointAlpha;
     if (this.stage === 'to_bravo') return WORLD_LAYOUT.waypointBravo;
     if (this.stage === 'strike_radar') return WORLD_LAYOUT.radarSitePosition;
@@ -149,6 +166,16 @@ export class MissionManager {
 
     switch (this.stage) {
       case 'to_alpha': {
+        if (this.missionId === 'iron_anvil') {
+          // Horizontal distance only: the player may cross the coast at any altitude.
+          const dx = input.playerPosition.x - WORLD_LAYOUT.waypointCoast.x;
+          const dz = input.playerPosition.z - WORLD_LAYOUT.waypointCoast.z;
+          if (Math.hypot(dx, dz) < WAYPOINT_ARRIVAL_RADIUS * 2) {
+            this.setStage('strike_armor');
+            this.queueMessage('Airborne Control', 'Feet dry, Viper One. Armour is on the plateau dead ahead. Watch for flak below nine hundred metres.');
+          }
+          break;
+        }
         const dist = input.playerPosition.distanceTo(WORLD_LAYOUT.waypointAlpha);
         if (dist < WAYPOINT_ARRIVAL_RADIUS) {
           this.setStage('intercept');
@@ -174,6 +201,12 @@ export class MissionManager {
         if (input.radarDestroyed) {
           this.setStage('rtb');
           this.queueMessage('Resolute Control', 'Good hit, Viper One. Radar is down. Return to Resolute for recovery.');
+        }
+        break;
+      case 'strike_armor':
+        if ((input.armorRemaining ?? 1) <= 0) {
+          this.setStage('rtb');
+          this.queueMessage('Resolute Control', 'Column is burning, Viper One. Outstanding work. Return to Resolute for recovery.');
         }
         break;
       case 'rtb': {

@@ -9,6 +9,9 @@ export interface ResultsData {
   completionTimeSeconds: number;
   landedSuccessfully: boolean;
   sessionBest: number | null;
+  missionName: string;
+  /** Strike missions fold the fighter and radar rows into one ground-target row. */
+  strike: boolean;
 }
 
 export class ResultsScreen {
@@ -28,7 +31,7 @@ export class ResultsScreen {
       <div class="crt-panel">
         <div class="title-block">
           <h1 class="title-main">${data.success ? 'MISSION SUCCESS' : 'MISSION FAILED'}</h1>
-          <div class="title-sub">${data.success ? 'OPERATION BROKEN BEACON COMPLETE' : (data.failReason ?? '')}</div>
+          <div class="title-sub">${data.success ? `${data.missionName.toUpperCase()} COMPLETE` : (data.failReason ?? '')}</div>
         </div>
         <div class="grade">${data.score.grade}</div>
         <div class="row">
@@ -41,8 +44,10 @@ export class ResultsScreen {
           <div class="col">
             <div class="section-title">SCORE BREAKDOWN</div>
             <table class="results-table">
-              <tr><td>Enemies destroyed</td><td>${data.score.breakdown.enemies}</td></tr>
-              <tr><td>Radar destroyed</td><td>${data.score.breakdown.radar}</td></tr>
+              ${data.strike
+                ? `<tr><td>Armour destroyed</td><td>${data.score.breakdown.radar}</td></tr>`
+                : `<tr><td>Enemies destroyed</td><td>${data.score.breakdown.enemies}</td></tr>
+              <tr><td>Radar destroyed</td><td>${data.score.breakdown.radar}</td></tr>`}
               <tr><td>Cannon accuracy (${Math.round(data.accuracy * 100)}%)</td><td>${Math.round(data.score.breakdown.accuracy)}</td></tr>
               <tr><td>Missiles remaining</td><td>${data.score.breakdown.missiles}</td></tr>
               <tr><td>Aircraft health</td><td>${Math.round(data.score.breakdown.health)}</td></tr>
@@ -51,7 +56,7 @@ export class ResultsScreen {
               <tr><td>Civilian penalty</td><td>-${data.score.breakdown.civilianPenalty}</td></tr>
               <tr><td><strong>TOTAL</strong></td><td><strong>${data.score.score}</strong></td></tr>
             </table>
-            ${data.sessionBest !== null ? `<p style="margin-top:8px;">Session best: ${data.sessionBest}</p>` : ''}
+            ${data.sessionBest !== null ? `<p style="margin-top:8px;">Best score: ${data.sessionBest}</p>` : ''}
           </div>
         </div>
         <div class="actions-row">

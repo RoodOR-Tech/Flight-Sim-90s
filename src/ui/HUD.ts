@@ -18,6 +18,14 @@ export interface HUDData {
   healthFraction: number;
   cannonAmmo: number;
   missilesRemaining: number;
+  /** HUD label for the missile line, e.g. "MISSILES" or "AT MISSILES". */
+  missileLabel: string;
+  /** Null when the loadout carries no bombs. */
+  bombsRemaining: number | null;
+  /** Predicted bomb impact point in screen fractions (0..1), or null when off-screen / no bombs. */
+  bombPipper: { x: number; y: number } | null;
+  /** Screen position (0..1) of the selected target, or null when none / off-screen. */
+  targetMarker: { x: number; y: number } | null;
   selectedWeapon: 'cannon' | 'missile';
   gearDown: boolean;
   flapsDown: boolean;
@@ -160,7 +168,12 @@ export class HUD {
     ctx.textAlign = 'right';
     ctx.fillText(`WEAPON: ${data.selectedWeapon === 'cannon' ? 'CANNON' : 'MISSILE'}`, w - 20, h - 130);
     ctx.fillText(`CANNON ${data.cannonAmmo}`, w - 20, h - 108);
-    ctx.fillText(`MISSILES ${data.missilesRemaining}/4`, w - 20, h - 86);
+    ctx.fillText(`${data.missileLabel} ${data.missilesRemaining}/4`, w - 20, h - 86);
+    if (data.bombsRemaining !== null) {
+      ctx.fillText(`BOMBS ${data.bombsRemaining}`, w - 20, h - 64);
+    }
+    if (data.bombPipper) this.drawBombPipper(data.bombPipper.x * w, data.bombPipper.y * h);
+    if (data.targetMarker) this.drawTargetBox(data.targetMarker.x * w, data.targetMarker.y * h, data.locked);
 
     // Target info
     if (data.targetLabel) {
@@ -335,6 +348,43 @@ export class HUD {
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  /** Designator box around the selected target, so small or distant targets can be found. */
+  private drawTargetBox(x: number, y: number, locked: boolean) {
+    const ctx = this.ctx;
+    const r = 16;
+    const k = 6;
+    ctx.strokeStyle = locked ? RED : GREEN;
+    ctx.beginPath();
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      ctx.moveTo(x + sx * r, y + sy * (r - k));
+      ctx.lineTo(x + sx * r, y + sy * r);
+      ctx.lineTo(x + sx * (r - k), y + sy * r);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = GREEN;
+  }
+
+  /** CCIP pipper: where a bomb released right now will land. */
+  private drawBombPipper(x: number, y: number) {
+    const ctx = this.ctx;
+    ctx.strokeStyle = AMBER;
+    ctx.fillStyle = AMBER;
+    ctx.beginPath();
+    ctx.arc(x, y, 11, 0, Math.PI * 2);
+    ctx.moveTo(x - 18, y);
+    ctx.lineTo(x - 11, y);
+    ctx.moveTo(x + 11, y);
+    ctx.lineTo(x + 18, y);
+    ctx.moveTo(x, y - 18);
+    ctx.lineTo(x, y - 11);
+    ctx.stroke();
+    ctx.fillRect(x - 1, y - 1, 2, 2);
+    ctx.textAlign = 'center';
+    ctx.fillText('CCIP', x, y + 24);
+    ctx.strokeStyle = GREEN;
+    ctx.fillStyle = GREEN;
   }
 
   private drawReticle(cx: number, cy: number, shootCue: boolean) {

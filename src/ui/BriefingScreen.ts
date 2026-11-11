@@ -1,8 +1,10 @@
 import { Difficulty } from '../game/Constants';
+import { MISSIONS, MISSION_ORDER, MissionId } from '../game/Missions';
 
 export interface BriefingResult {
   difficulty: Difficulty;
   skipLaunch: boolean;
+  missionId: MissionId;
 }
 
 /** The pre-mission briefing screen: original tactical text, loadout, controls, and start options. */
@@ -10,6 +12,7 @@ export class BriefingScreen {
   el: HTMLElement;
   private difficulty: Difficulty = 'normal';
   private skipLaunch = false;
+  private missionId: MissionId = 'broken_beacon';
   private onStart: ((result: BriefingResult) => void) | null = null;
 
   constructor(container: HTMLElement) {
@@ -18,47 +21,43 @@ export class BriefingScreen {
     this.el.innerHTML = this.template();
     container.appendChild(this.el);
     this.bind();
+    this.renderMission();
   }
 
   private template(): string {
     return `
       <div class="crt-panel">
         <div class="title-block">
-          <h1 class="title-main">OPERATION BROKEN BEACON</h1>
+          <h1 class="title-main" id="briefing-title"></h1>
           <div class="title-sub">MISSION BRIEFING &mdash; CVN RESOLUTE CARRIER AIR WING</div>
+        </div>
+        <div class="section-title">MISSION</div>
+        <div class="diff-select">
+          ${MISSION_ORDER.map(
+            (id) => `<button class="hud-button" data-mission="${id}">${MISSIONS[id].shortName}</button>`,
+          ).join('')}
         </div>
         <div class="row">
           <div class="col briefing-text">
             <div class="section-title">SITUATION</div>
-            <p>Hostile fighters designated Kestrel-9 are massing east of the task force. A coastal early-warning
-            radar is vectoring them toward CVN Resolute. Fleet intelligence confirms the installation is
-            purely military; nearby coastal structures are civilian and must not be engaged.</p>
+            <p id="briefing-situation"></p>
             <div class="section-title">OBJECTIVES</div>
-            <ul class="plain">
-              <li>Launch and proceed to waypoint ALPHA</li>
-              <li>Intercept and destroy two Kestrel-9 fighters</li>
-              <li>Proceed to waypoint BRAVO and destroy the coastal radar site</li>
-              <li>Return to CVN Resolute and land</li>
-              <li>Do not engage civilian structures</li>
-            </ul>
+            <ul class="plain" id="briefing-objectives"></ul>
             <div class="section-title">WEATHER / DURATION</div>
-            <p>Scattered clouds, light haze, sea state 2. Estimated mission duration: 10-15 minutes.</p>
+            <p id="briefing-weather"></p>
           </div>
           <div class="col briefing-text">
             <div class="section-title">LOADOUT &mdash; VIPER ONE</div>
-            <ul class="plain">
-              <li>1x 20mm cannon, 240 rounds</li>
-              <li>4x radar-guided air-to-air missiles</li>
-            </ul>
+            <ul class="plain" id="briefing-loadout"></ul>
             <div class="section-title">CONTROLS</div>
             <ul class="plain">
               <li>W/S pitch, A/D roll, Q/E yaw (arrow keys also work)</li>
               <li>Shift/Ctrl throttle, B afterburner</li>
-              <li>Space cannon, R missile, T cycle target, L radar lock</li>
+              <li>Space cannon, R missile, X bomb, T cycle target, L radar lock</li>
               <li>G gear, F flaps, C camera, M map, P/Esc pause</li>
             </ul>
             <div class="section-title">THREAT SUMMARY</div>
-            <p>2x Kestrel-9 fighters (cannon + missiles), 1x coastal early-warning radar.</p>
+            <p id="briefing-threat"></p>
           </div>
         </div>
         <div class="section-title">DIFFICULTY</div>
@@ -81,7 +80,40 @@ export class BriefingScreen {
     `;
   }
 
+  /** Fills in the mission-specific text. All of it comes from the static mission catalogue. */
+  private renderMission() {
+    const m = MISSIONS[this.missionId];
+    const text = (id: string, value: string) => {
+      this.el.querySelector(`#${id}`)!.textContent = value;
+    };
+    const list = (id: string, items: string[]) => {
+      const ul = this.el.querySelector(`#${id}`)!;
+      ul.replaceChildren(
+        ...items.map((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          return li;
+        }),
+      );
+    };
+    text('briefing-title', m.name.toUpperCase());
+    text('briefing-situation', m.situation);
+    text('briefing-weather', m.weather);
+    text('briefing-threat', m.threat);
+    list('briefing-objectives', m.objectives);
+    list('briefing-loadout', m.loadoutLines);
+    this.el.querySelectorAll<HTMLButtonElement>('[data-mission]').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mission === this.missionId);
+    });
+  }
+
   private bind() {
+    this.el.querySelectorAll<HTMLButtonElement>('[data-mission]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.missionId = btn.dataset.mission as MissionId;
+        this.renderMission();
+      });
+    });
     this.el.querySelectorAll<HTMLButtonElement>('[data-diff]').forEach((btn) => {
       btn.addEventListener('click', () => {
         this.difficulty = btn.dataset.diff as Difficulty;
@@ -94,7 +126,7 @@ export class BriefingScreen {
       this.skipLaunch = skipBox.checked;
     });
     this.el.querySelector('#briefing-start-btn')!.addEventListener('click', () => {
-      this.onStart?.({ difficulty: this.difficulty, skipLaunch: this.skipLaunch });
+      this.onStart?.({ difficulty: this.difficulty, skipLaunch: this.skipLaunch, missionId: this.missionId });
     });
   }
 

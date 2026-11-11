@@ -77,6 +77,28 @@ naval interceptor launching from **CVN Resolute**:
 Civilian structures near the coast must not be engaged — one accidental hit is a warning, repeated
 hits fail the mission.
 
+### Mission 2: Operation Iron Anvil
+
+Pick the mission on the briefing screen. An armoured column of six **Bulwark** tanks is crossing a
+plateau on the western mainland, escorted by two flak vehicles.
+
+1. Launch and cross the coast at waypoint **COAST**.
+2. Destroy all six tanks. The flak vehicles are optional targets, but they fire leading bursts at
+   anything inside about 900 m.
+3. Return to **CVN Resolute** and land.
+
+Loadout: cannon, **4 guided anti-tank missiles** and **6 unguided bombs**.
+
+- **Anti-tank missiles** work like the air-to-air ones: cycle to a vehicle with **T**, hold **L**
+  until `RADAR LOCK`, fire with **R**. One missile kills one vehicle. A bracket on the HUD marks
+  the selected target so you can find it against the ground.
+- **Bombs** are released with **X** and fall ballistically with the aircraft's speed. The amber
+  **CCIP** pipper shows where a bomb dropped right now would land; it is below the nose in level
+  flight, so put the aircraft into a dive, fly the pipper onto the target, release and pull out. A
+  near miss still kills: a tank within roughly 20 m of the impact is destroyed.
+- The tanks keep moving along their route for the first minute or two, so lead them or attack along
+  the line of the column.
+
 ## Controls
 
 | Key | Action |
@@ -90,6 +112,7 @@ hits fail the mission.
 | B | Afterburner |
 | Space | Fire cannon |
 | R | Fire locked missile |
+| X | Release bomb (mission 2) |
 | T | Cycle radar target |
 | L | Hold to acquire radar lock |
 | G | Toggle landing gear |

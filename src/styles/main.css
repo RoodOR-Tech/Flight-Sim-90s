@@ -210,6 +210,13 @@ ul.plain li::before {
   margin-top: 22px;
   gap: 16px;
   flex-wrap: wrap;
+  /* Keep Start/Restart reachable when a tall panel scrolls on a short screen. */
+  position: sticky;
+  bottom: -28px;
+  padding: 12px 0 28px;
+  margin-bottom: -28px;
+  background: #060e08;
+  z-index: 1;
 }
 
 .checkbox-row {
