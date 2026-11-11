@@ -19,7 +19,40 @@ jobs:
         run: npm run build
       - name: Unit tests
         run: npm test
+      # No --with-deps: GitHub-hosted runners already ship Chromium's system libraries, and the
+      # extra apt step (fonts only) makes the job depend on Ubuntu's package mirrors being reachable.
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Browser smoke tests
         run: npm run test:e2e
+
+  # Publishes the tested build to GitHub Pages. Runs only for pushes to the default branch, and
+  # only after build-and-test has passed, so a broken build is never deployed.
+  deploy-pages:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
