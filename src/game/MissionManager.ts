@@ -78,6 +78,11 @@ export class MissionManager {
   }
 
   beginFlight() {
+    if (this.missionId === 'carrier_practice') {
+      this.setStage('landing');
+      this.queueMessage('Resolute Control', 'Viper One, cleared to land. Gear and flaps are down. Hold the centreline.');
+      return;
+    }
     this.setStage('to_alpha');
     this.queueMessage(
       'Resolute Control',

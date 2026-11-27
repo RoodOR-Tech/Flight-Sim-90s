@@ -1,3 +1,5 @@
+import { LandingConditions } from '../flight/LandingEvaluator';
+import { MPS_TO_KNOTS } from '../game/Constants';
 import { ScoreResult } from '../systems/ScoringSystem';
 
 export interface ResultsData {
@@ -59,12 +61,41 @@ export class ResultsScreen {
             ${data.sessionBest !== null ? `<p style="margin-top:8px;">Best score: ${data.sessionBest}</p>` : ''}
           </div>
         </div>
-        <div class="actions-row">
-          <button class="hud-button secondary" id="results-briefing-btn">RETURN TO BRIEFING</button>
-          <button class="hud-button" id="results-restart-btn">RESTART MISSION</button>
-        </div>
+        ${this.actions('RESTART MISSION')}
       </div>
     `;
+    this.open();
+  }
+
+  showPractice(success: boolean, reason: string | undefined, touchdown: LandingConditions | null) {
+    this.el.innerHTML = `
+      <div class="crt-panel" style="max-width:540px">
+        <div class="title-block">
+          <div class="title-sub">CARRIER LANDING PRACTICE</div>
+          <h1 class="title-main">${success ? 'WIRE CAUGHT' : 'APPROACH ENDED'}</h1>
+          <p>${success ? 'Welcome aboard CVN Resolute.' : reason}</p>
+        </div>
+        ${touchdown ? `<div class="section-title">AT TOUCHDOWN</div>
+          <table class="results-table">
+            <tr><td>Airspeed</td><td>${Math.round(touchdown.speed * MPS_TO_KNOTS)} kt</td></tr>
+            <tr><td>Descent rate</td><td>${touchdown.descentRate.toFixed(1)} m/s</td></tr>
+            <tr><td>Distance from centreline</td><td>${Math.abs(touchdown.lateralOffset).toFixed(1)} m</td></tr>
+            <tr><td>Landing gear</td><td>${touchdown.gearDown ? 'Down' : 'Up'}</td></tr>
+          </table>` : ''}
+        ${this.actions('FLY AGAIN')}
+      </div>
+    `;
+    this.open();
+  }
+
+  private actions(retryLabel: string) {
+    return `<div class="actions-row">
+          <button class="hud-button secondary" id="results-briefing-btn">RETURN TO BRIEFING</button>
+          <button class="hud-button" id="results-restart-btn">${retryLabel}</button>
+        </div>`;
+  }
+
+  private open() {
     this.el.querySelector('#results-restart-btn')!.addEventListener('click', () => this.onRestartCb?.());
     this.el.querySelector('#results-briefing-btn')!.addEventListener('click', () => this.onBriefingCb?.());
     this.el.classList.remove('hidden');

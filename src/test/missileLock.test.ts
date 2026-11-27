@@ -106,4 +106,25 @@ describe('RadarSystem missile-lock eligibility', () => {
     expect(player.lockProgress).toBe(0);
     expect(player.locked).toBe(false);
   });
+
+  it('assists both contact types and preserves a manual selection while it is on the scope', () => {
+    const air = new FakeTarget(new THREE.Vector3(0, 0, -1000));
+    const ground: Targetable = Object.assign(new FakeTarget(new THREE.Vector3(0, -80, -600)), {
+      id: 'truck', kind: 'ground' as const,
+    });
+    radar.update(1.4, player, [air, ground], false, true);
+    expect(player.currentTargetId).toBe('truck');
+    expect(player.locked).toBe(true);
+    radar.cycleTarget(player, [air, ground]);
+    air.getPosition().set(900, 0, 0);
+    radar.update(1.4, player, [air, ground], false, true);
+    expect(player.currentTargetId).toBe(air.id);
+    expect(radar.cue).toBe('TURN TOWARD CONTACT');
+    air.getPosition().set(0, 0, -800);
+    expect(radar.update(1.4, player, [air, ground], false, true).justAcquired).toBe(true);
+    air.kill();
+    radar.update(0.1, player, [air, ground], false, true);
+    expect(player.currentTargetId).toBe('truck');
+    expect(player.locked).toBe(false);
+  });
 });

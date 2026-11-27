@@ -16,6 +16,7 @@ export interface Settings {
   mouseSensitivity: number; // 0..1
   difficulty: Difficulty;
   muted: boolean;
+  radarAssist: boolean;
   reducedScreenShake: boolean;
   showFps: boolean;
   /** Graphics preset; 'auto' lets AdaptiveQuality pick and tune. */
@@ -65,6 +66,7 @@ export class GameState {
     mouseSensitivity: 0.5,
     difficulty: 'normal',
     muted: false,
+    radarAssist: true,
     reducedScreenShake: false,
     showFps: false,
     graphicsQuality: 'auto',

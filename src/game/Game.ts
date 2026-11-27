@@ -1,3 +1,4 @@
+import { ControlsReference } from '../ui/ControlsReference';
 import * as THREE from 'three';
 import { GameState } from './GameState';
 import { InputManager } from './InputManager';
@@ -12,7 +13,7 @@ import { predictBombImpact } from '../entities/Bomb';
 import { MISSIONS, MissionId } from './Missions';
 import { PlayerInputAdapter } from '../flight/AircraftController';
 import { FlightControls } from '../flight/FlightModel';
-import { evaluateLanding } from '../flight/LandingEvaluator';
+import { evaluateLanding, LandingConditions } from '../flight/LandingEvaluator';
 import { CombatSystem } from '../systems/CombatSystem';
 import { RadarSystem, RADAR_RANGE } from '../systems/RadarSystem';
 import { CollisionSystem } from '../systems/CollisionSystem';
@@ -46,6 +47,11 @@ import { MAX_PIXEL_RATIO } from '../rendering/RenderConstants';
 type LaunchPhase = 'none' | 'onDeck' | 'catapult' | 'airborne';
 
 const CAMERA_MODES: CameraMode[] = ['chase', 'cockpit', 'cinematic'];
+const APPROACH_SPEED = 65; // m/s
+const GLIDE_GRADIENT = 0.05;
+// The sim captures the aircraft origin above the deck when it reaches the wires.
+const glideHeight = (distanceAftOfWires: number) => 8 + Math.max(0, distanceAftOfWires) * GLIDE_GRADIENT;
+
 const CATAPULT_DURATION = 1.7;
 const CATAPULT_LAUNCH_SPEED = 78;
 
@@ -68,6 +74,7 @@ export class Game {
   private groundTarget!: GroundTarget;
   /** Mission 2 vehicles: tanks (the objective) and flak carriers (optional, hostile). */
   private groundUnits: GroundUnit[] = [];
+  private offsetApproach = false;
   private missionId: MissionId = 'broken_beacon';
 
   private hud: HUD;
@@ -76,6 +83,7 @@ export class Game {
   private results: ResultsScreen;
   private loading: LoadingScreen;
   private title: TitleScreen;
+  private controlsReference: ControlsReference;
   private pauseMenu: PauseMenu;
   private settingsPanel: SettingsPanel;
   private subtitleEl: HTMLElement;
@@ -100,6 +108,8 @@ export class Game {
   private frameCount = 0;
   private fpsTimer = 0;
   private landingResult: 'pending' | 'success' | 'crash' = 'pending';
+
+  private touchdown: LandingConditions | null = null;
 
   // Reused scratch objects — the render loop must not allocate per frame.
   private tmpShake = new THREE.Vector3();
@@ -153,8 +163,11 @@ export class Game {
     this.results = new ResultsScreen(uiRoot);
     this.loading = new LoadingScreen(uiRoot);
     this.title = new TitleScreen(uiRoot);
+    this.controlsReference = new ControlsReference(uiRoot, () => this.input.reset());
+    this.briefing.onControls(() => this.controlsReference.show());
     this.pauseMenu = new PauseMenu(uiRoot, {
       onResume: () => this.togglePause(false),
+      onControls: () => this.controlsReference.show(),
       onRestart: () => this.restartMission(),
       onSettings: () => this.settingsPanel.show(),
       onQuitToTitle: () => this.goToTitle(),
@@ -437,6 +450,7 @@ export class Game {
     this.state.settings.difficulty = result.difficulty;
     this.state.skipCarrierLaunch = result.skipLaunch;
     this.missionId = result.missionId;
+    this.offsetApproach = result.offsetApproach;
     this.applySettings(this.state.settings);
     this.audio.resume();
     this.audio.startEngine();
@@ -455,15 +469,25 @@ export class Game {
     this.lastMessageId = -1;
     this.subtitleEl.style.display = 'none';
 
-    if (result.skipLaunch) {
+    this.touchdown = null;
+    this.accumulator = 0;
+    const fm = this.player.controller.flightModel;
+    const practice = this.missionId === 'carrier_practice';
+    fm.turbulence = !practice;
+    if (practice) {
+      this.launchPhase = 'airborne';
+      this.placeOnFinal();
+      this.mission.beginFlight();
+    } else if (result.skipLaunch) {
       this.launchPhase = 'airborne';
       const carrier = this.world.carrier;
       const startPos = carrier.getPosition().clone().add(new THREE.Vector3(400, 420, -600));
-      this.player.controller.flightModel.position.copy(startPos);
-      this.player.controller.flightModel.velocity.copy(carrier.getForward().multiplyScalar(140));
-      this.player.controller.flightModel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), carrier.getForward());
-      this.player.controller.flightModel.throttle = 0.7;
-      this.player.controller.flightModel.gearDown = false;
+      fm.position.copy(startPos);
+      fm.velocity.copy(carrier.getForward().multiplyScalar(140));
+      fm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), carrier.getForward());
+      fm.throttle = 0.7;
+      fm.gearDown = false;
+      fm.flapsDown = false;
       this.mission.beginFlight();
     } else {
       this.launchPhase = 'onDeck';
@@ -481,6 +505,7 @@ export class Game {
     this.startMission({
       difficulty: this.state.settings.difficulty,
       skipLaunch: this.state.skipCarrierLaunch,
+      offsetApproach: this.offsetApproach,
       missionId: this.missionId,
     });
   }
@@ -570,6 +595,26 @@ export class Game {
     }
   }
 
+  private placeOnFinal() {
+    const fm = this.player.controller.flightModel;
+    const carrier = this.world.carrier;
+    const finalDistance = 850;
+    const local = carrier.attachments.landingZoneCenter.position.clone();
+    if (this.offsetApproach) local.x += 30;
+    local.z += finalDistance;
+    local.y = glideHeight(finalDistance);
+    fm.position.copy(carrier.localToWorld(local));
+    fm.quaternion.copy(carrier.group.quaternion);
+    // Trim the nose a little below the glide path to balance lift in the arcade flight model.
+    const trimPitch = THREE.MathUtils.degToRad(-4.05);
+    fm.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), trimPitch));
+    fm.velocity.copy(carrier.getForward()).multiplyScalar(APPROACH_SPEED);
+    fm.velocity.y = -3;
+    fm.throttle = 0.26;
+    fm.gearDown = true;
+    fm.flapsDown = true;
+  }
+
   private placeOnCatapult() {
     const carrier = this.world.carrier;
     const { start } = carrier.getCatapultWorld();
@@ -593,6 +638,7 @@ export class Game {
       const frameTimeMs = now - this.lastTime;
       let rawDt = frameTimeMs / 1000;
       this.lastTime = now;
+      if (this.controlsReference.open) return;
       // Clamp so a tab switch or a GC pause cannot teleport the simulation.
       rawDt = Math.min(rawDt, MAX_FRAME_DT);
 
@@ -617,10 +663,11 @@ export class Game {
       }
 
       if (this.state.screen === 'playing') {
+        if (this.input.consumeJustPressed('toggleMap')) this.toggleMap();
         this.accumulator += rawDt;
         let steps = 0;
         this.perf.beginSubsystem('sim');
-        while (this.accumulator >= FIXED_TIMESTEP && steps < 6) {
+        while (this.state.screen === 'playing' && this.accumulator >= FIXED_TIMESTEP && steps < 6) {
           this.fixedUpdate(FIXED_TIMESTEP);
           this.accumulator -= FIXED_TIMESTEP;
           steps += 1;
@@ -639,9 +686,6 @@ export class Game {
   }
 
   private fixedUpdate(dt: number) {
-    if (this.input.consumeJustPressed('toggleMap')) {
-      this.toggleMap();
-    }
     if (this.state.paused || this.tacticalMap.isVisible()) return;
 
     this.world.update(dt, this.camera.position, this.player.getPosition());
@@ -814,18 +858,15 @@ export class Game {
     }
   }
 
-  private handleWeaponsInput(_dt: number) {
+  private handleWeaponsInput(dt: number) {
     const targets = this.liveTargets();
 
     if (this.input.consumeJustPressed('cycleTarget')) {
       this.radar.cycleTarget(this.player, targets);
     }
     const lockHeld = this.input.isHeld('radarLock');
-    const { justAcquired } = this.radar.update(_dt, this.player, targets, lockHeld);
+    const { justAcquired } = this.radar.update(dt, this.player, targets, lockHeld, this.state.settings.radarAssist);
     if (justAcquired) this.audio.lockAcquiredTone();
-    else if (lockHeld && !this.player.locked && this.player.lockProgress > 0) {
-      // subtle periodic tone while locking handled via HUD visuals only to avoid audio spam
-    }
 
     if (this.input.isHeld('fireCannon') && this.player.canFireCannon()) {
       this.player.consumeCannonShot();
@@ -862,7 +903,8 @@ export class Game {
       const otherEnemy = this.enemies.find((e) => e !== enemy && e.isAlive());
       enemy.update(dt, this.player.getPosition(), this.player.isAlive(), otherEnemy ? otherEnemy.getPosition() : null);
       if (enemy.cannonFireRequested) {
-        const origin = enemy.controller.flightModel.position.clone().addScaledVector(enemy.controller.flightModel.getForward(), 3.5);
+        const origin = enemy.model.cannonMuzzle.getWorldPosition(this.tmpVec);
+        this.effects.muzzleFlash(origin);
         this.combat.fireCannon(this.scene, origin, enemy.controller.flightModel.getForward(), 'enemy');
       }
       if (enemy.missileFireRequested) {
@@ -959,35 +1001,41 @@ export class Game {
     }
     this.audio.explosion();
     this.effects.addShake(1.6);
+    if (this.mission.stage === 'landing') {
+      this.landingResult = 'crash';
+      const causes = { water: 'Water impact', ground: 'Terrain impact', hull: 'Hit the carrier structure', midair: 'Midair collision' };
+      this.mission.fail(causes[cause]);
+    }
     this.player.controller.applyDamage(999);
     this.player.setVisible(false);
   }
 
   private updateLandingLogic(_dt: number) {
-    if (this.mission.stage !== 'landing') return;
+    if (this.mission.stage !== 'landing' || !this.player.isAlive()) return;
     const pos = this.player.getPosition();
     const carrier = this.world.carrier;
-    const contact = CollisionSystem.carrierContact(pos, carrier);
-    if (contact === 'hull') {
-      this.crashPlayer();
+    const local = CollisionSystem.localDeckPosition(pos, carrier);
+    if (this.missionId === 'carrier_practice' && local.z <= CARRIER_LOCAL.arrestingZoneStart.z) {
+      const wide = Math.abs(local.x - CARRIER_LOCAL.deckCenterline) >= CARRIER_LOCAL.deckHalfWidth;
+      this.mission.fail(wide ? 'Passed the wires wide of the deck.' : 'Flew over the wires without touching down.');
       return;
     }
-    if (contact !== 'deck') return;
+    if (CollisionSystem.carrierContact(pos, carrier) !== 'deck') return;
 
-    const local = CollisionSystem.localDeckPosition(pos, carrier);
     const inArrestingZone = local.z > CARRIER_LOCAL.arrestingZoneStart.z && local.z < CARRIER_LOCAL.arrestingZoneEnd.z;
     if (!inArrestingZone) return;
 
     const fm = this.player.controller.flightModel;
     const headingDiff = this.angleDiffDeg(fm.getHeadingDegrees(), carrier.headingDeg);
-    const evaluation = evaluateLanding({
+    this.touchdown = {
       gearDown: fm.gearDown,
       speed: fm.getSpeed(),
       descentRate: -fm.velocity.y,
       lateralOffset: local.x - CARRIER_LOCAL.deckCenterline,
       headingDiffDeg: headingDiff,
       inArrestingZone,
-    });
+    };
+    const evaluation = evaluateLanding(this.touchdown);
 
     if (evaluation.success) {
       this.landingResult = 'success';
@@ -998,6 +1046,8 @@ export class Game {
       this.effects.addShake(0.5);
       this.mission.completeSuccess();
     } else {
+      this.landingResult = 'crash';
+      this.mission.fail('Touchdown: ' + evaluation.reasons.join(', '));
       this.crashPlayer();
     }
   }
@@ -1134,7 +1184,6 @@ export class Game {
     if (agl < 250 && fm.velocity.y < -12) warnings.push('PULL UP');
     if (agl < 120) warnings.push('LOW ALTITUDE');
     if (this.combat.missiles.some((m) => m.owner === 'enemy' && m.target?.id === 'player' && m.alive)) warnings.push('MISSILE');
-    if (this.player.locked) warnings.push('RADAR LOCK');
     if (this.mission.stage === 'landing' && !fm.gearDown) warnings.push('GEAR');
     if (this.mission.stage === 'rtb' && this.mission.boundaryWarningActive) warnings.push('RETURN TO CARRIER');
     if (this.mission.boundaryWarningActive && this.mission.stage !== 'rtb') warnings.push('BOUNDARY');
@@ -1157,12 +1206,16 @@ export class Game {
       this.mission.stage === 'rtb' || this.mission.stage === 'landing' ? 'CVN RESOLUTE' : null;
 
     const radarContacts: HUDRadarContact[] = [];
-    const fwd = fm.getForward();
-    const right = fm.getRight();
+    // Heading-up plan view. Rolling the aircraft must not rotate ground contacts around the scope.
+    const heading = THREE.MathUtils.degToRad(fm.getHeadingDegrees());
+    const sin = Math.sin(heading);
+    const cos = Math.cos(heading);
     const toRel = (worldPos: THREE.Vector3) => {
-      const toTarget = worldPos.clone().sub(fm.position);
-      return { relForward: toTarget.dot(fwd), relRight: toTarget.dot(right) };
+      const dx = worldPos.x - fm.position.x;
+      const dz = worldPos.z - fm.position.z;
+      return { relForward: dx * sin - dz * cos, relRight: dx * cos + dz * sin };
     };
+    const selected = currentTarget ? toRel(currentTarget.getPosition()) : null;
     for (const e of this.enemies) {
       if (!e.isAlive()) continue;
       const rel = toRel(e.getPosition());
@@ -1182,13 +1235,13 @@ export class Game {
     let landingGuidance: LandingGuidance | null = null;
     if (this.mission.stage === 'rtb' || this.mission.stage === 'landing') {
       const local = CollisionSystem.localDeckPosition(fm.position, carrier);
-      const idealGlideDrop = Math.max(0, local.z - CARRIER_LOCAL.arrestingZoneStart.z) * 0.05 + 8;
+      const idealGlideDrop = glideHeight(local.z - carrier.attachments.landingZoneCenter.position.z);
       const distanceToDeck = fm.position.distanceTo(carrier.getPosition());
       landingGuidance = {
         distanceToDeck,
         lineupOffset: THREE.MathUtils.clamp((local.x - CARRIER_LOCAL.deckCenterline) / 30, -1, 1),
         glideSlopeOffset: THREE.MathUtils.clamp((local.y - idealGlideDrop) / 20, -1, 1),
-        recommendedSpeedKnots: 90,
+        recommendedSpeedKnots: APPROACH_SPEED * MPS_TO_KNOTS,
         waveOff: speedKnots > 210 || Math.abs(local.x - CARRIER_LOCAL.deckCenterline) > 60,
       };
     }
@@ -1211,8 +1264,9 @@ export class Game {
       gearDown: fm.gearDown,
       flapsDown: fm.flapsDown,
       targetLabel: currentTarget?.label ?? null,
+      radarCue: this.missionId !== 'carrier_practice' && this.launchPhase === 'airborne' ? this.radar.cue : '',
+      targetClock: selected ? (Math.round(Math.atan2(selected.relRight, selected.relForward) * 6 / Math.PI) + 12) % 12 || 12 : null,
       targetRange: currentTarget ? currentTarget.getPosition().distanceTo(fm.position) : null,
-      lockProgress: this.player.lockProgress,
       locked: this.player.locked,
       waypointLabel,
       waypointDistance: waypointForHud ? fm.position.distanceTo(waypointForHud) : null,
@@ -1226,7 +1280,7 @@ export class Game {
       radarRange: RADAR_RANGE,
       shootCue: this.player.locked || (currentTarget !== null && (currentTarget.getPosition().distanceTo(fm.position) < 420)),
       damageDirection: this.effects.damageFlashTimer > 0 && this.effects.lastDamageDirection
-        ? { forward: this.effects.lastDamageDirection.dot(fwd), right: this.effects.lastDamageDirection.dot(right) }
+        ? { forward: this.effects.lastDamageDirection.dot(fm.getForward(this.tmpForward)), right: this.effects.lastDamageDirection.dot(fm.getRight(this.tmpVec)) }
         : null,
       landingGuidance,
     };
@@ -1373,6 +1427,12 @@ export class Game {
     this.state.screen = success ? 'success' : 'failure';
     this.audio.stopEngine();
     this.stopSpeech();
+    this.hud.setVisible(false);
+    this.subtitleEl.style.display = 'none';
+    if (this.missionId === 'carrier_practice') {
+      this.results.showPractice(success, failReason, this.touchdown);
+      return;
+    }
     // Count actual kills: before the intercept stage no fighters exist, so none were destroyed.
     const enemiesDestroyed = this.enemies.filter((e) => !e.isAlive()).length;
     const strike = this.missionId === 'iron_anvil';
@@ -1396,7 +1456,6 @@ export class Game {
       this.state.sessionBest = { score: score.score, grade: score.grade };
       this.state.saveBest();
     }
-    this.hud.setVisible(false);
     this.results.show({
       success,
       failReason,

@@ -22,7 +22,7 @@ export type ActionKey =
   | 'menu'
   | 'confirm';
 
-const KEY_MAP: Record<string, ActionKey> = {
+export const KEY_MAP: Record<string, ActionKey> = {
   KeyW: 'pitchDown',
   ArrowUp: 'pitchDown',
   KeyS: 'pitchUp',
@@ -78,6 +78,7 @@ export class InputManager {
     const action = KEY_MAP[e.code];
     if (action) {
       if (this.preventDefaultFor(e.code)) e.preventDefault();
+      if (e.repeat) return;
       if (!this.held.has(action)) this.justPressed.add(action);
       if (this.enabled || action === 'menu' || action === 'pause' || action === 'confirm') {
         this.held.add(action);
@@ -107,9 +108,14 @@ export class InputManager {
     }
   };
 
-  private onBlur = () => {
+  reset() {
     this.held.clear();
-  };
+    this.justPressed.clear();
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+  }
+
+  private onBlur = () => this.reset();
 
   private onMouseMove = (e: MouseEvent) => {
     this.mouseDeltaX += e.movementX || 0;

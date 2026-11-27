@@ -171,3 +171,89 @@ test.describe('Operation Broken Beacon smoke test', () => {
     await page.click('#set-close-btn');
   });
 });
+
+test('a trimmed practice approach catches a wire and can be flown again', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  await page.click('[data-mission="carrier_practice"]');
+  await expect(page.locator('#skip-launch-checkbox')).toBeHidden();
+  await page.click('#briefing-start-btn');
+  const state = await readSceneState(page);
+  expect(state.missionStage).toBe('landing');
+  expect(state.gearDown && state.flapsDown).toBe(true);
+  expect([state.enemyCount, state.groundUnits.length, state.cannonAmmo, state.missiles, state.bombs]).toEqual([0, 0, 0, 0, 0]);
+
+  await expect(page.getByRole('heading', { name: 'WIRE CAUGHT' })).toBeVisible({ timeout: 90000 });
+  await expect(page.getByText('AT TOUCHDOWN')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('obb.best.v1'))).toBeNull();
+  await page.getByRole('button', { name: 'FLY AGAIN' }).click();
+  expect((await readSceneState(page)).missionStage).toBe('landing');
+});
+
+test('an uncorrected offset approach gives a specific debrief and returns to mission selection', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  await page.click('[data-mission="carrier_practice"]');
+  await page.selectOption('#practice-approach', 'offset');
+  await page.click('#briefing-start-btn');
+  await expect(page.getByText('Passed the wires wide of the deck.')).toBeVisible({ timeout: 90000 });
+  await expect(page.getByText('AT TOUCHDOWN')).toBeHidden();
+  await page.click('#results-briefing-btn');
+  await page.click('[data-mission="broken_beacon"]');
+  await expect(page.locator('#practice-approach')).toBeHidden();
+  await page.check('#skip-launch-checkbox');
+  await page.click('#briefing-start-btn');
+  const state = await readSceneState(page);
+  expect(state.missionStage).toBe('to_alpha');
+  expect(state.flapsDown).toBe(false);
+  expect(state.gearDown).toBe(false);
+  expect(state.cannonAmmo).toBe(240);
+});
+
+test('F1 freezes flight and returns to the underlying briefing, flight, map or pause menu', async ({ page }) => {
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  const controls = page.getByRole('dialog', { name: 'Keyboard controls' });
+  const briefingButton = page.locator('#briefing-controls-btn');
+  await briefingButton.click();
+  await expect(controls.getByText('Hold for manual lock')).toBeVisible();
+  await controls.getByRole('button', { name: 'Close' }).click();
+  await expect(briefingButton).toBeFocused();
+  await page.check('#skip-launch-checkbox');
+  await page.click('#briefing-start-btn');
+  await expect(page.locator('.hud-canvas')).toBeVisible();
+
+  await page.keyboard.down('F1');
+  await page.keyboard.down('F1');
+  await page.keyboard.up('F1');
+  await expect(controls).toBeVisible();
+  const before = await readSceneState(page);
+  for (const key of ['g', 'c', 'p', 'm']) await page.keyboard.press(key);
+  await page.waitForTimeout(250);
+  expect((await readSceneState(page)).position).toEqual(before.position);
+  await page.keyboard.press('Escape');
+  await expect(controls).toBeHidden();
+  await expect.poll(async () => (await readSceneState(page)).position).not.toEqual(before.position);
+  const after = await readSceneState(page);
+  expect(after.screen).toBe('playing');
+  expect(after.gearDown).toBe(before.gearDown);
+  expect(after.cameraMode).toBe(before.cameraMode);
+
+  await page.keyboard.press('m');
+  const map = page.getByRole('heading', { name: 'TACTICAL MAP' });
+  await expect(map).toBeVisible();
+  await page.keyboard.press('F1');
+  await expect(controls).toBeVisible();
+  await page.keyboard.press('F1');
+  await expect(controls).toBeHidden();
+  await expect(map).toBeVisible();
+  await page.keyboard.press('m');
+  await expect(map).toBeHidden();
+  await page.keyboard.press('p');
+  await page.locator('#pause-controls-btn').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause-resume-btn')).toBeVisible();
+  expect((await readSceneState(page)).paused).toBe(true);
+});
