@@ -52,7 +52,9 @@ export class ControlsReference {
     container.append(this.dialog);
     this.dialog.querySelector('button')!.addEventListener('click', () => this.dialog.close());
     // Let native scrolling, focus navigation and button activation work inside the modal.
-    this.dialog.addEventListener('keydown', (event) => event.stopPropagation());
+    this.dialog.addEventListener('keydown', (event) => {
+      if (this.open) event.stopPropagation();
+    });
     window.addEventListener('keydown', (event) => {
       if (event.code !== 'F1' && !(this.open && event.code === 'Escape')) return;
       event.preventDefault();

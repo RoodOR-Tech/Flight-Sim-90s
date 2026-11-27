@@ -663,6 +663,7 @@ export class Game {
       }
 
       if (this.state.screen === 'playing') {
+        if (this.input.consumeJustPressed('toggleMap')) this.toggleMap();
         this.accumulator += rawDt;
         let steps = 0;
         this.perf.beginSubsystem('sim');
@@ -685,9 +686,6 @@ export class Game {
   }
 
   private fixedUpdate(dt: number) {
-    if (this.input.consumeJustPressed('toggleMap')) {
-      this.toggleMap();
-    }
     if (this.state.paused || this.tacticalMap.isVisible()) return;
 
     this.world.update(dt, this.camera.position, this.player.getPosition());
