@@ -153,6 +153,8 @@ export class SettingsPanel {
 
         <div class="section-title">ACCESSIBILITY</div>
         <div class="settings-grid">
+          <label for="set-radar">Auto-select and lock radar contacts</label>
+          <input type="checkbox" id="set-radar" ${this.settings.radarAssist ? 'checked' : ''} />
           <label for="set-shake">Reduce Screen Shake</label>
           <input type="checkbox" id="set-shake" ${this.settings.reducedScreenShake ? 'checked' : ''} />
           <label for="set-motion">Reduced Motion</label>
@@ -195,6 +197,7 @@ export class SettingsPanel {
     this.bindRange('#set-sens', (v) => (this.settings.mouseSensitivity = v));
     this.bindRange('#set-damping', (v) => (this.settings.cameraDamping = v));
 
+    this.bindCheckbox('#set-radar', (v) => (this.settings.radarAssist = v));
     this.bindCheckbox('#set-mute', (v) => (this.settings.muted = v));
     this.bindCheckbox('#set-shake', (v) => (this.settings.reducedScreenShake = v));
     this.bindCheckbox('#set-motion', (v) => (this.settings.reducedMotion = v));

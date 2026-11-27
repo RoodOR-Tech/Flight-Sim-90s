@@ -2,17 +2,23 @@ import * as THREE from 'three';
 
 const SPEED = 780;
 const MAX_RANGE = 950;
-const TRACER_LENGTH = 9;
-
-const tracerGeo = new THREE.CylinderGeometry(0.045, 0.045, TRACER_LENGTH, 5);
+// A bright head sits at the game round's position. The narrow, fading end trails behind it.
+const TRAIL_LENGTH = 4.5;
+const tracerGeo = new THREE.CylinderGeometry(0.015, 0.12, TRAIL_LENGTH, 6);
 tracerGeo.rotateX(Math.PI / 2);
-tracerGeo.translate(0, 0, -TRACER_LENGTH / 2);
+tracerGeo.translate(0, 0, TRAIL_LENGTH / 2);
+const vertices = tracerGeo.getAttribute('position');
+const colors = [];
+for (let i = 0; i < vertices.count; i++) {
+  const tail = vertices.getZ(i) > TRAIL_LENGTH / 2;
+  colors.push(1, tail ? 0.36 : 0.95, tail ? 0.12 : 0.78, tail ? 0.02 : 1);
+}
+tracerGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4));
 
-// Shared per owner: rounds are spawned ~11 times a second and must not each allocate a material.
-const TRACER_MATERIALS = {
-  player: new THREE.MeshBasicMaterial({ color: 0xbfffcc }),
-  enemy: new THREE.MeshBasicMaterial({ color: 0xffcf7a }),
-};
+const tracerMaterial = new THREE.MeshBasicMaterial({
+  vertexColors: true, transparent: true, depthWrite: false, toneMapped: false,
+});
+const FORWARD = new THREE.Vector3(0, 0, -1);
 
 export type ProjectileOwner = 'player' | 'enemy';
 
@@ -26,7 +32,7 @@ export class Projectile {
   alive = true;
   mesh: THREE.Mesh;
 
-  constructor(scene: THREE.Scene, origin: THREE.Vector3, direction: THREE.Vector3, spread: number, owner: ProjectileOwner) {
+  constructor(scene: THREE.Scene, origin: THREE.Vector3, direction: THREE.Vector3, spread: number, owner: ProjectileOwner, bright = true) {
     this.position = origin.clone();
     this.previousPosition = origin.clone();
     const dir = direction.clone().normalize();
@@ -36,11 +42,12 @@ export class Projectile {
       dir.z += (Math.random() - 0.5) * spread;
       dir.normalize();
     }
-    this.velocity = dir.multiplyScalar(SPEED);
+    this.velocity = dir.clone().multiplyScalar(SPEED);
     this.owner = owner;
-    this.mesh = new THREE.Mesh(tracerGeo, TRACER_MATERIALS[owner]);
+    this.mesh = new THREE.Mesh(tracerGeo, tracerMaterial);
     this.mesh.position.copy(this.position);
-    this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
+    this.mesh.quaternion.setFromUnitVectors(FORWARD, dir);
+    this.mesh.scale.setScalar(bright ? 1 : 0.17);
     scene.add(this.mesh);
   }
 

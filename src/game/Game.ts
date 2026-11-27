@@ -854,18 +854,15 @@ export class Game {
     }
   }
 
-  private handleWeaponsInput(_dt: number) {
+  private handleWeaponsInput(dt: number) {
     const targets = this.liveTargets();
 
     if (this.input.consumeJustPressed('cycleTarget')) {
       this.radar.cycleTarget(this.player, targets);
     }
     const lockHeld = this.input.isHeld('radarLock');
-    const { justAcquired } = this.radar.update(_dt, this.player, targets, lockHeld);
+    const { justAcquired } = this.radar.update(dt, this.player, targets, lockHeld, this.state.settings.radarAssist);
     if (justAcquired) this.audio.lockAcquiredTone();
-    else if (lockHeld && !this.player.locked && this.player.lockProgress > 0) {
-      // subtle periodic tone while locking handled via HUD visuals only to avoid audio spam
-    }
 
     if (this.input.isHeld('fireCannon') && this.player.canFireCannon()) {
       this.player.consumeCannonShot();
@@ -902,7 +899,8 @@ export class Game {
       const otherEnemy = this.enemies.find((e) => e !== enemy && e.isAlive());
       enemy.update(dt, this.player.getPosition(), this.player.isAlive(), otherEnemy ? otherEnemy.getPosition() : null);
       if (enemy.cannonFireRequested) {
-        const origin = enemy.controller.flightModel.position.clone().addScaledVector(enemy.controller.flightModel.getForward(), 3.5);
+        const origin = enemy.model.cannonMuzzle.getWorldPosition(this.tmpVec);
+        this.effects.muzzleFlash(origin);
         this.combat.fireCannon(this.scene, origin, enemy.controller.flightModel.getForward(), 'enemy');
       }
       if (enemy.missileFireRequested) {
@@ -1182,7 +1180,6 @@ export class Game {
     if (agl < 250 && fm.velocity.y < -12) warnings.push('PULL UP');
     if (agl < 120) warnings.push('LOW ALTITUDE');
     if (this.combat.missiles.some((m) => m.owner === 'enemy' && m.target?.id === 'player' && m.alive)) warnings.push('MISSILE');
-    if (this.player.locked) warnings.push('RADAR LOCK');
     if (this.mission.stage === 'landing' && !fm.gearDown) warnings.push('GEAR');
     if (this.mission.stage === 'rtb' && this.mission.boundaryWarningActive) warnings.push('RETURN TO CARRIER');
     if (this.mission.boundaryWarningActive && this.mission.stage !== 'rtb') warnings.push('BOUNDARY');
@@ -1205,12 +1202,16 @@ export class Game {
       this.mission.stage === 'rtb' || this.mission.stage === 'landing' ? 'CVN RESOLUTE' : null;
 
     const radarContacts: HUDRadarContact[] = [];
-    const fwd = fm.getForward();
-    const right = fm.getRight();
+    // Heading-up plan view. Rolling the aircraft must not rotate ground contacts around the scope.
+    const heading = THREE.MathUtils.degToRad(fm.getHeadingDegrees());
+    const sin = Math.sin(heading);
+    const cos = Math.cos(heading);
     const toRel = (worldPos: THREE.Vector3) => {
-      const toTarget = worldPos.clone().sub(fm.position);
-      return { relForward: toTarget.dot(fwd), relRight: toTarget.dot(right) };
+      const dx = worldPos.x - fm.position.x;
+      const dz = worldPos.z - fm.position.z;
+      return { relForward: dx * sin - dz * cos, relRight: dx * cos + dz * sin };
     };
+    const selected = currentTarget ? toRel(currentTarget.getPosition()) : null;
     for (const e of this.enemies) {
       if (!e.isAlive()) continue;
       const rel = toRel(e.getPosition());
@@ -1259,8 +1260,9 @@ export class Game {
       gearDown: fm.gearDown,
       flapsDown: fm.flapsDown,
       targetLabel: currentTarget?.label ?? null,
+      radarCue: this.missionId !== 'carrier_practice' && this.launchPhase === 'airborne' ? this.radar.cue : '',
+      targetClock: selected ? (Math.round(Math.atan2(selected.relRight, selected.relForward) * 6 / Math.PI) + 12) % 12 || 12 : null,
       targetRange: currentTarget ? currentTarget.getPosition().distanceTo(fm.position) : null,
-      lockProgress: this.player.lockProgress,
       locked: this.player.locked,
       waypointLabel,
       waypointDistance: waypointForHud ? fm.position.distanceTo(waypointForHud) : null,
@@ -1274,7 +1276,7 @@ export class Game {
       radarRange: RADAR_RANGE,
       shootCue: this.player.locked || (currentTarget !== null && (currentTarget.getPosition().distanceTo(fm.position) < 420)),
       damageDirection: this.effects.damageFlashTimer > 0 && this.effects.lastDamageDirection
-        ? { forward: this.effects.lastDamageDirection.dot(fwd), right: this.effects.lastDamageDirection.dot(right) }
+        ? { forward: this.effects.lastDamageDirection.dot(fm.getForward(this.tmpForward)), right: this.effects.lastDamageDirection.dot(fm.getRight(this.tmpVec)) }
         : null,
       landingGuidance,
     };

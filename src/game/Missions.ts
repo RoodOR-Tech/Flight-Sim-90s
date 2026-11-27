@@ -64,7 +64,7 @@ export const MISSIONS: Record<MissionId, MissionDefinition> = {
     weather: 'Scattered clouds, light haze over land. Estimated mission duration: 10-15 minutes.',
     loadoutLines: [
       '1x 20mm cannon, 240 rounds',
-      '4x guided anti-tank missiles (lock with T / L, fire with R)',
+      '4x guided anti-tank missiles (radar assist, T cycles, R fires)',
       '6x unguided 250 kg bombs (release with X, aim with the CCIP pipper)',
     ],
     threat: '6x Bulwark tanks (no anti-air), 2x flak vehicles (radar-laid cannon, effective below 900 m).',

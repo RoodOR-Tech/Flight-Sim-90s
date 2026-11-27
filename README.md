@@ -89,8 +89,7 @@ plateau on the western mainland, escorted by two flak vehicles.
 
 Loadout: cannon, **4 guided anti-tank missiles** and **6 unguided bombs**.
 
-- **Anti-tank missiles** work like the air-to-air ones: cycle to a vehicle with **T**, hold **L**
-  until `RADAR LOCK`, fire with **R**. One missile kills one vehicle. A bracket on the HUD marks
+- **Anti-tank missiles** work like the air-to-air ones: radar assist selects a vehicle and starts locking when eligible. **T** cycles contacts and **R** fires once locked. One missile kills one vehicle. A bracket on the HUD marks
   the selected target so you can find it against the ground.
 - **Bombs** are released with **X** and fall ballistically with the aircraft's speed. The amber
   **CCIP** pipper shows where a bomb dropped right now would land; it is below the nose in level
@@ -140,8 +139,7 @@ checkbox on the briefing starts you airborne.
   steeper bank and lower speed. Add a little back-stick (S) to hold altitude through the turn.
 - The aircraft has momentum and does not fly like a camera. Ease the nose up out of a dive rather
   than yanking it.
-- Missiles need a completed radar lock: cycle a target with **T**, hold **L** until `RADAR LOCK`
-  appears, then fire with **R**. A `SHOOT` cue confirms a valid firing solution.
+- Missiles need a completed radar lock: radar assist selects and locks an eligible contact. Use **T** to cycle and **R** to fire. The scope shows the contact’s clock position, range and lock status. With assist off in Settings, select with **T** and hold **L** to lock. A `SHOOT` cue confirms a valid firing solution.
 - The cannon is unguided with a short effective range — get inside ~400 m and lead the target.
 - Watch the radar scope (bottom right) and the tactical map (**M**) for bogeys, the carrier, the
   radar site and your waypoint.

@@ -54,8 +54,8 @@ export class BriefingScreen {
             <ul class="plain">
               <li>W/S pitch, A/D roll, Q/E yaw (arrow keys also work)</li>
               <li>Shift/Ctrl throttle, B afterburner</li>
-              <li>Space cannon, R missile, X bomb, T cycle target, L radar lock</li>
-              <li>G gear, F flaps, C camera, M map, P/Esc pause</li>
+              <li>Radar assist selects and locks contacts. T cycles, R fires a locked missile.</li>
+              <li>Space cannon, X bomb, G gear, F flaps, C camera, M map, P/Esc pause</li>
             </ul>
             <div class="section-title">THREAT SUMMARY</div>
             <p id="briefing-threat"></p>

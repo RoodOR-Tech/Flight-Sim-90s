@@ -36,6 +36,7 @@ export class CombatSystem {
   bombs: Bomb[] = [];
   private shotsFiredByPlayer = 0;
   private shotsHitByPlayer = 0;
+  private tracerIndex = { player: 0, enemy: 0 };
 
   getAccuracy(): number {
     if (this.shotsFiredByPlayer === 0) return 1;
@@ -43,7 +44,8 @@ export class CombatSystem {
   }
 
   fireCannon(scene: THREE.Scene, origin: THREE.Vector3, dir: THREE.Vector3, owner: ProjectileOwner) {
-    this.projectiles.push(new Projectile(scene, origin, dir, CANNON_SPREAD, owner));
+    const bright = this.tracerIndex[owner]++ % 3 === 0;
+    this.projectiles.push(new Projectile(scene, origin, dir, CANNON_SPREAD, owner, bright));
     if (owner === 'player') this.shotsFiredByPlayer += 1;
   }
 
@@ -181,6 +183,7 @@ export class CombatSystem {
     this.bombs = [];
     this.projectiles = [];
     this.missiles = [];
+    this.tracerIndex = { player: 0, enemy: 0 };
     this.shotsFiredByPlayer = 0;
     this.shotsHitByPlayer = 0;
   }

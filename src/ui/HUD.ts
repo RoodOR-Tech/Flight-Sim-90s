@@ -30,8 +30,9 @@ export interface HUDData {
   gearDown: boolean;
   flapsDown: boolean;
   targetLabel: string | null;
+  radarCue: string;
+  targetClock: number | null;
   targetRange: number | null;
-  lockProgress: number;
   locked: boolean;
   waypointLabel: string | null;
   waypointDistance: number | null;
@@ -175,19 +176,18 @@ export class HUD {
     if (data.bombPipper) this.drawBombPipper(data.bombPipper.x * w, data.bombPipper.y * h);
     if (data.targetMarker) this.drawTargetBox(data.targetMarker.x * w, data.targetMarker.y * h, data.locked);
 
-    // Target info
-    if (data.targetLabel) {
-      ctx.textAlign = 'left';
-      ctx.fillText(`TGT: ${data.targetLabel}`, cx + 90, 60);
-      if (data.targetRange !== null) ctx.fillText(`RNG: ${Math.round(data.targetRange)} M`, cx + 90, 80);
-      const lockColor = data.locked ? RED : AMBER;
-      ctx.fillStyle = lockColor;
-      if (data.locked) {
-        ctx.fillText('RADAR LOCK', cx + 90, 100);
-      } else if (data.lockProgress > 0) {
-        ctx.fillText(`LOCKING ${Math.round(data.lockProgress * 100)}%`, cx + 90, 100);
-      }
+    // Keep contact and lock status together with the scope, away from the mission objective.
+    if (data.radarCue) {
+      const x = w - 22;
+      const y = h - 370;
+      ctx.textAlign = 'right';
       ctx.fillStyle = GREEN;
+      if (data.targetLabel && data.targetRange !== null) {
+        ctx.fillText(`${data.targetLabel}  ${(data.targetRange / 1000).toFixed(1)} KM  ·  ${data.targetClock} O'CLOCK`, x, y - 18);
+      }
+      ctx.fillStyle = data.locked ? GREEN : AMBER;
+      const cue = data.locked && data.missilesRemaining > 0 ? 'LOCKED  ·  R FIRE' : data.radarCue;
+      ctx.fillText(cue, x, y);
     }
 
     // Mission objective / waypoint
@@ -456,6 +456,11 @@ export class HUD {
       if (Math.hypot(px - cx, py - cy) > radius) continue;
       ctx.strokeStyle = c.kind === 'enemy' ? RED : c.kind === 'carrier' ? GREEN : c.kind === 'ground' ? AMBER : GREEN_DIM;
       ctx.fillStyle = ctx.strokeStyle;
+      if (c.selected) {
+        ctx.strokeStyle = GREEN;
+        ctx.strokeRect(px - 8, py - 8, 16, 16);
+        ctx.strokeStyle = ctx.fillStyle;
+      }
       if (c.kind === 'enemy') {
         ctx.beginPath();
         ctx.moveTo(px, py - 4);
