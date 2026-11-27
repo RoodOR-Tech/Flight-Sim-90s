@@ -99,6 +99,14 @@ Loadout: cannon, **4 guided anti-tank missiles** and **6 unguided bombs**.
 - The tanks keep moving along their route for the first minute or two, so lead them or attack along
   the line of the column.
 
+### Carrier landing practice
+
+Select **Carrier Practice → Fly Approach** in the briefing to start 850 m behind the wires with gear
+and flaps down. Start aligned to see a trimmed approach in calm air, or choose the 30 m offset
+to practise correcting the lineup. Use small pitch and roll inputs
+to keep the dot centred in the landing box. The debrief shows airspeed, descent rate, centreline
+offset and gear position at touchdown. **Fly Again** resets the approach. Practice is unscored.
+
 ## Controls
 
 | Key | Action |

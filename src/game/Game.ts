@@ -12,7 +12,7 @@ import { predictBombImpact } from '../entities/Bomb';
 import { MISSIONS, MissionId } from './Missions';
 import { PlayerInputAdapter } from '../flight/AircraftController';
 import { FlightControls } from '../flight/FlightModel';
-import { evaluateLanding } from '../flight/LandingEvaluator';
+import { evaluateLanding, LandingConditions } from '../flight/LandingEvaluator';
 import { CombatSystem } from '../systems/CombatSystem';
 import { RadarSystem, RADAR_RANGE } from '../systems/RadarSystem';
 import { CollisionSystem } from '../systems/CollisionSystem';
@@ -46,6 +46,11 @@ import { MAX_PIXEL_RATIO } from '../rendering/RenderConstants';
 type LaunchPhase = 'none' | 'onDeck' | 'catapult' | 'airborne';
 
 const CAMERA_MODES: CameraMode[] = ['chase', 'cockpit', 'cinematic'];
+const APPROACH_SPEED = 65; // m/s
+const GLIDE_GRADIENT = 0.05;
+// The sim captures the aircraft origin above the deck when it reaches the wires.
+const glideHeight = (distanceAftOfWires: number) => 8 + Math.max(0, distanceAftOfWires) * GLIDE_GRADIENT;
+
 const CATAPULT_DURATION = 1.7;
 const CATAPULT_LAUNCH_SPEED = 78;
 
@@ -68,6 +73,7 @@ export class Game {
   private groundTarget!: GroundTarget;
   /** Mission 2 vehicles: tanks (the objective) and flak carriers (optional, hostile). */
   private groundUnits: GroundUnit[] = [];
+  private offsetApproach = false;
   private missionId: MissionId = 'broken_beacon';
 
   private hud: HUD;
@@ -100,6 +106,8 @@ export class Game {
   private frameCount = 0;
   private fpsTimer = 0;
   private landingResult: 'pending' | 'success' | 'crash' = 'pending';
+
+  private touchdown: LandingConditions | null = null;
 
   // Reused scratch objects — the render loop must not allocate per frame.
   private tmpShake = new THREE.Vector3();
@@ -437,6 +445,7 @@ export class Game {
     this.state.settings.difficulty = result.difficulty;
     this.state.skipCarrierLaunch = result.skipLaunch;
     this.missionId = result.missionId;
+    this.offsetApproach = result.offsetApproach;
     this.applySettings(this.state.settings);
     this.audio.resume();
     this.audio.startEngine();
@@ -455,15 +464,25 @@ export class Game {
     this.lastMessageId = -1;
     this.subtitleEl.style.display = 'none';
 
-    if (result.skipLaunch) {
+    this.touchdown = null;
+    this.accumulator = 0;
+    const fm = this.player.controller.flightModel;
+    const practice = this.missionId === 'carrier_practice';
+    fm.turbulence = !practice;
+    if (practice) {
+      this.launchPhase = 'airborne';
+      this.placeOnFinal();
+      this.mission.beginFlight();
+    } else if (result.skipLaunch) {
       this.launchPhase = 'airborne';
       const carrier = this.world.carrier;
       const startPos = carrier.getPosition().clone().add(new THREE.Vector3(400, 420, -600));
-      this.player.controller.flightModel.position.copy(startPos);
-      this.player.controller.flightModel.velocity.copy(carrier.getForward().multiplyScalar(140));
-      this.player.controller.flightModel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), carrier.getForward());
-      this.player.controller.flightModel.throttle = 0.7;
-      this.player.controller.flightModel.gearDown = false;
+      fm.position.copy(startPos);
+      fm.velocity.copy(carrier.getForward().multiplyScalar(140));
+      fm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), carrier.getForward());
+      fm.throttle = 0.7;
+      fm.gearDown = false;
+      fm.flapsDown = false;
       this.mission.beginFlight();
     } else {
       this.launchPhase = 'onDeck';
@@ -481,6 +500,7 @@ export class Game {
     this.startMission({
       difficulty: this.state.settings.difficulty,
       skipLaunch: this.state.skipCarrierLaunch,
+      offsetApproach: this.offsetApproach,
       missionId: this.missionId,
     });
   }
@@ -570,6 +590,26 @@ export class Game {
     }
   }
 
+  private placeOnFinal() {
+    const fm = this.player.controller.flightModel;
+    const carrier = this.world.carrier;
+    const finalDistance = 850;
+    const local = carrier.attachments.landingZoneCenter.position.clone();
+    if (this.offsetApproach) local.x += 30;
+    local.z += finalDistance;
+    local.y = glideHeight(finalDistance);
+    fm.position.copy(carrier.localToWorld(local));
+    fm.quaternion.copy(carrier.group.quaternion);
+    // Trim the nose a little below the glide path to balance lift in the arcade flight model.
+    const trimPitch = THREE.MathUtils.degToRad(-4.05);
+    fm.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), trimPitch));
+    fm.velocity.copy(carrier.getForward()).multiplyScalar(APPROACH_SPEED);
+    fm.velocity.y = -3;
+    fm.throttle = 0.26;
+    fm.gearDown = true;
+    fm.flapsDown = true;
+  }
+
   private placeOnCatapult() {
     const carrier = this.world.carrier;
     const { start } = carrier.getCatapultWorld();
@@ -620,7 +660,7 @@ export class Game {
         this.accumulator += rawDt;
         let steps = 0;
         this.perf.beginSubsystem('sim');
-        while (this.accumulator >= FIXED_TIMESTEP && steps < 6) {
+        while (this.state.screen === 'playing' && this.accumulator >= FIXED_TIMESTEP && steps < 6) {
           this.fixedUpdate(FIXED_TIMESTEP);
           this.accumulator -= FIXED_TIMESTEP;
           steps += 1;
@@ -959,35 +999,41 @@ export class Game {
     }
     this.audio.explosion();
     this.effects.addShake(1.6);
+    if (this.mission.stage === 'landing') {
+      this.landingResult = 'crash';
+      const causes = { water: 'Water impact', ground: 'Terrain impact', hull: 'Hit the carrier structure', midair: 'Midair collision' };
+      this.mission.fail(causes[cause]);
+    }
     this.player.controller.applyDamage(999);
     this.player.setVisible(false);
   }
 
   private updateLandingLogic(_dt: number) {
-    if (this.mission.stage !== 'landing') return;
+    if (this.mission.stage !== 'landing' || !this.player.isAlive()) return;
     const pos = this.player.getPosition();
     const carrier = this.world.carrier;
-    const contact = CollisionSystem.carrierContact(pos, carrier);
-    if (contact === 'hull') {
-      this.crashPlayer();
+    const local = CollisionSystem.localDeckPosition(pos, carrier);
+    if (this.missionId === 'carrier_practice' && local.z <= CARRIER_LOCAL.arrestingZoneStart.z) {
+      const wide = Math.abs(local.x - CARRIER_LOCAL.deckCenterline) >= CARRIER_LOCAL.deckHalfWidth;
+      this.mission.fail(wide ? 'Passed the wires wide of the deck.' : 'Flew over the wires without touching down.');
       return;
     }
-    if (contact !== 'deck') return;
+    if (CollisionSystem.carrierContact(pos, carrier) !== 'deck') return;
 
-    const local = CollisionSystem.localDeckPosition(pos, carrier);
     const inArrestingZone = local.z > CARRIER_LOCAL.arrestingZoneStart.z && local.z < CARRIER_LOCAL.arrestingZoneEnd.z;
     if (!inArrestingZone) return;
 
     const fm = this.player.controller.flightModel;
     const headingDiff = this.angleDiffDeg(fm.getHeadingDegrees(), carrier.headingDeg);
-    const evaluation = evaluateLanding({
+    this.touchdown = {
       gearDown: fm.gearDown,
       speed: fm.getSpeed(),
       descentRate: -fm.velocity.y,
       lateralOffset: local.x - CARRIER_LOCAL.deckCenterline,
       headingDiffDeg: headingDiff,
       inArrestingZone,
-    });
+    };
+    const evaluation = evaluateLanding(this.touchdown);
 
     if (evaluation.success) {
       this.landingResult = 'success';
@@ -998,6 +1044,8 @@ export class Game {
       this.effects.addShake(0.5);
       this.mission.completeSuccess();
     } else {
+      this.landingResult = 'crash';
+      this.mission.fail('Touchdown: ' + evaluation.reasons.join(', '));
       this.crashPlayer();
     }
   }
@@ -1182,13 +1230,13 @@ export class Game {
     let landingGuidance: LandingGuidance | null = null;
     if (this.mission.stage === 'rtb' || this.mission.stage === 'landing') {
       const local = CollisionSystem.localDeckPosition(fm.position, carrier);
-      const idealGlideDrop = Math.max(0, local.z - CARRIER_LOCAL.arrestingZoneStart.z) * 0.05 + 8;
+      const idealGlideDrop = glideHeight(local.z - carrier.attachments.landingZoneCenter.position.z);
       const distanceToDeck = fm.position.distanceTo(carrier.getPosition());
       landingGuidance = {
         distanceToDeck,
         lineupOffset: THREE.MathUtils.clamp((local.x - CARRIER_LOCAL.deckCenterline) / 30, -1, 1),
         glideSlopeOffset: THREE.MathUtils.clamp((local.y - idealGlideDrop) / 20, -1, 1),
-        recommendedSpeedKnots: 90,
+        recommendedSpeedKnots: APPROACH_SPEED * MPS_TO_KNOTS,
         waveOff: speedKnots > 210 || Math.abs(local.x - CARRIER_LOCAL.deckCenterline) > 60,
       };
     }
@@ -1373,6 +1421,12 @@ export class Game {
     this.state.screen = success ? 'success' : 'failure';
     this.audio.stopEngine();
     this.stopSpeech();
+    this.hud.setVisible(false);
+    this.subtitleEl.style.display = 'none';
+    if (this.missionId === 'carrier_practice') {
+      this.results.showPractice(success, failReason, this.touchdown);
+      return;
+    }
     // Count actual kills: before the intercept stage no fighters exist, so none were destroyed.
     const enemiesDestroyed = this.enemies.filter((e) => !e.isAlive()).length;
     const strike = this.missionId === 'iron_anvil';
@@ -1396,7 +1450,6 @@ export class Game {
       this.state.sessionBest = { score: score.score, grade: score.grade };
       this.state.saveBest();
     }
-    this.hud.setVisible(false);
     this.results.show({
       success,
       failReason,

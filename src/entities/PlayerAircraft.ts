@@ -144,8 +144,8 @@ export class PlayerAircraft implements Targetable {
   }
 
   /** Resets all per-mission state, reusing the existing scene objects. */
-  resetForMission(loadout: { missiles: number; bombs: number } = { missiles: MAX_MISSILES, bombs: 0 }) {
-    this.cannonAmmo = MAX_CANNON_AMMO;
+  resetForMission(loadout: { missiles: number; bombs: number; cannonRounds?: number } = { missiles: MAX_MISSILES, bombs: 0 }) {
+    this.cannonAmmo = loadout.cannonRounds ?? MAX_CANNON_AMMO;
     this.missileCount = Math.min(MAX_MISSILES, loadout.missiles);
     this.bombCount = loadout.bombs;
     this.bombCooldownTimer = 0;

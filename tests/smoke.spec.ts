@@ -171,3 +171,43 @@ test.describe('Operation Broken Beacon smoke test', () => {
     await page.click('#set-close-btn');
   });
 });
+
+test('a trimmed practice approach catches a wire and can be flown again', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  await page.click('[data-mission="carrier_practice"]');
+  await expect(page.locator('#skip-launch-checkbox')).toBeHidden();
+  await page.click('#briefing-start-btn');
+  const state = await readSceneState(page);
+  expect(state.missionStage).toBe('landing');
+  expect(state.gearDown && state.flapsDown).toBe(true);
+  expect([state.enemyCount, state.groundUnits.length, state.cannonAmmo, state.missiles, state.bombs]).toEqual([0, 0, 0, 0, 0]);
+
+  await expect(page.getByRole('heading', { name: 'WIRE CAUGHT' })).toBeVisible({ timeout: 90000 });
+  await expect(page.getByText('AT TOUCHDOWN')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('obb.best.v1'))).toBeNull();
+  await page.getByRole('button', { name: 'FLY AGAIN' }).click();
+  expect((await readSceneState(page)).missionStage).toBe('landing');
+});
+
+test('an uncorrected offset approach gives a specific debrief and returns to mission selection', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  await page.click('[data-mission="carrier_practice"]');
+  await page.selectOption('#practice-approach', 'offset');
+  await page.click('#briefing-start-btn');
+  await expect(page.getByText('Passed the wires wide of the deck.')).toBeVisible({ timeout: 90000 });
+  await expect(page.getByText('AT TOUCHDOWN')).toBeHidden();
+  await page.click('#results-briefing-btn');
+  await page.click('[data-mission="broken_beacon"]');
+  await expect(page.locator('#practice-approach')).toBeHidden();
+  await page.check('#skip-launch-checkbox');
+  await page.click('#briefing-start-btn');
+  const state = await readSceneState(page);
+  expect(state.missionStage).toBe('to_alpha');
+  expect(state.flapsDown).toBe(false);
+  expect(state.gearDown).toBe(false);
+  expect(state.cannonAmmo).toBe(240);
+});

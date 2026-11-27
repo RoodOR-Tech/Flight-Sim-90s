@@ -1,9 +1,10 @@
 // Mission catalogue: the data that differs between missions (briefing text, loadout, objectives).
 // The stage machine itself lives in MissionManager; the entities are spawned by Game.
 
-export type MissionId = 'broken_beacon' | 'iron_anvil';
+export type MissionId = 'broken_beacon' | 'iron_anvil' | 'carrier_practice';
 
 export interface MissionLoadout {
+  cannonRounds?: number;
   missiles: number;
   /** Shown on the HUD and briefing, e.g. "MISSILES" or "AT MISSILES". */
   missileLabel: string;
@@ -23,7 +24,7 @@ export interface MissionDefinition {
   loadout: MissionLoadout;
 }
 
-export const MISSION_ORDER: MissionId[] = ['broken_beacon', 'iron_anvil'];
+export const MISSION_ORDER: MissionId[] = ['broken_beacon', 'iron_anvil', 'carrier_practice'];
 
 export const MISSIONS: Record<MissionId, MissionDefinition> = {
   broken_beacon: {
@@ -68,5 +69,19 @@ export const MISSIONS: Record<MissionId, MissionDefinition> = {
     ],
     threat: '6x Bulwark tanks (no anti-air), 2x flak vehicles (radar-laid cannon, effective below 900 m).',
     loadout: { missiles: 4, missileLabel: 'AT MISSILES', bombs: 6 },
+  },
+  carrier_practice: {
+    id: 'carrier_practice',
+    name: 'Carrier Landing Practice',
+    shortName: 'CARRIER PRACTICE',
+    situation: 'You have the aircraft on final behind CVN Resolute. Gear and flaps are down. The deck is moving away from you.',
+    objectives: [
+      'Keep the approach indicator near the centre of the box. A high dot means you are above the glide path.',
+      'Hold the recommended speed on the HUD and settle onto the arresting wires.',
+    ],
+    weather: 'Calm air. About 15 seconds from final to touchdown.',
+    loadoutLines: ['Unarmed training aircraft'],
+    threat: 'Clear deck and airspace.',
+    loadout: { cannonRounds: 0, missiles: 0, missileLabel: 'MISSILES', bombs: 0 },
   },
 };

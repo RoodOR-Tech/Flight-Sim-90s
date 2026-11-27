@@ -4,6 +4,7 @@ import { MISSIONS, MISSION_ORDER, MissionId } from '../game/Missions';
 export interface BriefingResult {
   difficulty: Difficulty;
   skipLaunch: boolean;
+  offsetApproach: boolean;
   missionId: MissionId;
 }
 
@@ -60,11 +61,20 @@ export class BriefingScreen {
             <p id="briefing-threat"></p>
           </div>
         </div>
-        <div class="section-title">DIFFICULTY</div>
-        <div class="diff-select">
-          <button class="hud-button" data-diff="easy">EASY</button>
-          <button class="hud-button active" data-diff="normal">NORMAL</button>
-          <button class="hud-button" data-diff="hard">HARD</button>
+        <div id="briefing-difficulty">
+          <div class="section-title">DIFFICULTY</div>
+          <div class="diff-select">
+            <button class="hud-button" data-diff="easy">EASY</button>
+            <button class="hud-button active" data-diff="normal">NORMAL</button>
+            <button class="hud-button" data-diff="hard">HARD</button>
+          </div>
+        </div>
+        <div id="practice-start" hidden>
+          <label class="section-title" for="practice-approach">STARTING APPROACH</label>
+          <select id="practice-approach">
+            <option value="aligned">Aligned with the wires</option>
+            <option value="offset">30 m right of centreline</option>
+          </select>
         </div>
         <div class="actions-row">
           <label class="checkbox-row">
@@ -96,6 +106,11 @@ export class BriefingScreen {
         }),
       );
     };
+    const practice = this.missionId === 'carrier_practice';
+    this.el.querySelector<HTMLElement>('#briefing-difficulty')!.hidden = practice;
+    this.el.querySelector<HTMLElement>('.checkbox-row')!.hidden = practice;
+    this.el.querySelector<HTMLElement>('#practice-start')!.hidden = !practice;
+    text('briefing-start-btn', practice ? 'FLY APPROACH' : 'START MISSION');
     text('briefing-title', m.name.toUpperCase());
     text('briefing-situation', m.situation);
     text('briefing-weather', m.weather);
@@ -103,7 +118,9 @@ export class BriefingScreen {
     list('briefing-objectives', m.objectives);
     list('briefing-loadout', m.loadoutLines);
     this.el.querySelectorAll<HTMLButtonElement>('[data-mission]').forEach((b) => {
-      b.classList.toggle('active', b.dataset.mission === this.missionId);
+      const selected = b.dataset.mission === this.missionId;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', String(selected));
     });
   }
 
@@ -126,7 +143,12 @@ export class BriefingScreen {
       this.skipLaunch = skipBox.checked;
     });
     this.el.querySelector('#briefing-start-btn')!.addEventListener('click', () => {
-      this.onStart?.({ difficulty: this.difficulty, skipLaunch: this.skipLaunch, missionId: this.missionId });
+      this.onStart?.({
+        difficulty: this.difficulty,
+        skipLaunch: this.skipLaunch,
+        missionId: this.missionId,
+        offsetApproach: this.el.querySelector<HTMLSelectElement>('#practice-approach')!.value === 'offset',
+      });
     });
   }
 

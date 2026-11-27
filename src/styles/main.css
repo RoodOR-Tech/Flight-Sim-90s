@@ -226,8 +226,13 @@ ul.plain li::before {
   font-size: 0.85rem;
 }
 
+.checkbox-row[hidden] {
+  display: none;
+}
+
 .diff-select {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
