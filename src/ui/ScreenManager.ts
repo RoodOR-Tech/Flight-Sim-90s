@@ -78,7 +78,7 @@ export class PauseMenu {
   el: HTMLElement;
   constructor(
     container: HTMLElement,
-    handlers: { onResume: () => void; onRestart: () => void; onSettings: () => void; onQuitToTitle: () => void },
+    handlers: { onControls: () => void; onResume: () => void; onRestart: () => void; onSettings: () => void; onQuitToTitle: () => void },
   ) {
     this.el = document.createElement('div');
     this.el.className = 'screen hidden interactive';
@@ -87,6 +87,7 @@ export class PauseMenu {
         <div class="title-block"><h1 class="title-main" style="font-size:1.6rem;">PAUSED</h1></div>
         <div style="display:flex; flex-direction:column; gap:12px;">
           <button class="hud-button" id="pause-resume-btn">RESUME</button>
+          <button class="hud-button secondary" id="pause-controls-btn">F1 · KEYBOARD CONTROLS</button>
           <button class="hud-button secondary" id="pause-settings-btn">SETTINGS</button>
           <button class="hud-button secondary" id="pause-restart-btn">RESTART MISSION</button>
           <button class="hud-button secondary" id="pause-title-btn">RETURN TO TITLE</button>
@@ -94,6 +95,7 @@ export class PauseMenu {
       </div>
     `;
     container.appendChild(this.el);
+    this.el.querySelector('#pause-controls-btn')!.addEventListener('click', handlers.onControls);
     this.el.querySelector('#pause-resume-btn')!.addEventListener('click', handlers.onResume);
     this.el.querySelector('#pause-settings-btn')!.addEventListener('click', handlers.onSettings);
     this.el.querySelector('#pause-restart-btn')!.addEventListener('click', handlers.onRestart);

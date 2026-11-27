@@ -57,6 +57,7 @@ export class BriefingScreen {
               <li>Radar assist selects and locks contacts. T cycles, R fires a locked missile.</li>
               <li>Space cannon, X bomb, G gear, F flaps, C camera, M map, P/Esc pause</li>
             </ul>
+            <button class="hud-button secondary" id="briefing-controls-btn">F1 · KEYBOARD CONTROLS</button>
             <div class="section-title">THREAT SUMMARY</div>
             <p id="briefing-threat"></p>
           </div>
@@ -150,6 +151,10 @@ export class BriefingScreen {
         offsetApproach: this.el.querySelector<HTMLSelectElement>('#practice-approach')!.value === 'offset',
       });
     });
+  }
+
+  onControls(cb: () => void) {
+    this.el.querySelector('#briefing-controls-btn')!.addEventListener('click', cb);
   }
 
   onSettings(cb: () => void) {

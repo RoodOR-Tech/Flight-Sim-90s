@@ -1,3 +1,4 @@
+import { ControlsReference } from '../ui/ControlsReference';
 import * as THREE from 'three';
 import { GameState } from './GameState';
 import { InputManager } from './InputManager';
@@ -82,6 +83,7 @@ export class Game {
   private results: ResultsScreen;
   private loading: LoadingScreen;
   private title: TitleScreen;
+  private controlsReference: ControlsReference;
   private pauseMenu: PauseMenu;
   private settingsPanel: SettingsPanel;
   private subtitleEl: HTMLElement;
@@ -161,8 +163,11 @@ export class Game {
     this.results = new ResultsScreen(uiRoot);
     this.loading = new LoadingScreen(uiRoot);
     this.title = new TitleScreen(uiRoot);
+    this.controlsReference = new ControlsReference(uiRoot, () => this.input.reset());
+    this.briefing.onControls(() => this.controlsReference.show());
     this.pauseMenu = new PauseMenu(uiRoot, {
       onResume: () => this.togglePause(false),
+      onControls: () => this.controlsReference.show(),
       onRestart: () => this.restartMission(),
       onSettings: () => this.settingsPanel.show(),
       onQuitToTitle: () => this.goToTitle(),
@@ -633,6 +638,7 @@ export class Game {
       const frameTimeMs = now - this.lastTime;
       let rawDt = frameTimeMs / 1000;
       this.lastTime = now;
+      if (this.controlsReference.open) return;
       // Clamp so a tab switch or a GC pause cannot teleport the simulation.
       rawDt = Math.min(rawDt, MAX_FRAME_DT);
 

@@ -211,3 +211,49 @@ test('an uncorrected offset approach gives a specific debrief and returns to mis
   expect(state.gearDown).toBe(false);
   expect(state.cannonAmmo).toBe(240);
 });
+
+test('F1 freezes flight and returns to the underlying briefing, flight, map or pause menu', async ({ page }) => {
+  await page.goto('/');
+  await page.click('#title-start-btn');
+  const controls = page.getByRole('dialog', { name: 'Keyboard controls' });
+  const briefingButton = page.locator('#briefing-controls-btn');
+  await briefingButton.click();
+  await expect(controls.getByText('Hold for manual lock')).toBeVisible();
+  await controls.getByRole('button', { name: 'Close' }).click();
+  await expect(briefingButton).toBeFocused();
+  await page.check('#skip-launch-checkbox');
+  await page.click('#briefing-start-btn');
+  await expect(page.locator('.hud-canvas')).toBeVisible();
+
+  await page.keyboard.down('F1');
+  await page.keyboard.down('F1');
+  await page.keyboard.up('F1');
+  await expect(controls).toBeVisible();
+  const before = await readSceneState(page);
+  for (const key of ['g', 'c', 'p', 'm']) await page.keyboard.press(key);
+  await page.waitForTimeout(250);
+  expect((await readSceneState(page)).position).toEqual(before.position);
+  await page.keyboard.press('Escape');
+  await expect(controls).toBeHidden();
+  await expect.poll(async () => (await readSceneState(page)).position).not.toEqual(before.position);
+  const after = await readSceneState(page);
+  expect(after.screen).toBe('playing');
+  expect(after.gearDown).toBe(before.gearDown);
+  expect(after.cameraMode).toBe(before.cameraMode);
+
+  await page.keyboard.press('m');
+  const map = page.getByRole('heading', { name: 'TACTICAL MAP' });
+  await expect(map).toBeVisible();
+  await page.keyboard.press('F1');
+  await expect(controls).toBeVisible();
+  await page.keyboard.press('F1');
+  await expect(controls).toBeHidden();
+  await expect(map).toBeVisible();
+  await page.keyboard.press('m');
+  await expect(map).toBeHidden();
+  await page.keyboard.press('p');
+  await page.locator('#pause-controls-btn').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause-resume-btn')).toBeVisible();
+  expect((await readSceneState(page)).paused).toBe(true);
+});

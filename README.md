@@ -108,6 +108,9 @@ offset and gear position at touchdown. **Fly Again** resets the approach. Practi
 
 ## Controls
 
+Press **F1** to open the keyboard reference. Flight pauses while it is open. **F1**, **Esc** or
+**Close** returns to your previous view. The briefing and pause menu also have a controls button.
+
 | Key | Action |
 | --- | --- |
 | W / S | Pitch down / pitch up |
